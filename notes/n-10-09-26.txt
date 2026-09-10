@@ -1,0 +1,1623 @@
+10A  Process Identity Map              ✅
+10B  Identity-aware Relationships      ✅
+10C  Lifecycle Detection               ✅
+
+11A  Persist Lifecycle Events           ✅
+11B  Query Lifecycle Events             ✅
+11C  Rich Process Tree                  ← NEXT
+
+12A  Network Interface Collector
+12B  Listening Ports
+12C  Process → Network Connections
+
+13A  Service Discovery
+13B  Service → Process Relationships
+13C  Service Graph
+
+14A  Application Identification
+14B  Application → Process
+14C  Application Graph
+
+15A  Log Collection
+15B  Log → Entity
+15C  Log Correlation
+
+16A  Correlation Engine
+16B  Detection Rules
+16C  Galaxy Insights
+
+17A  API
+17B  Query API
+17C  Graph API
+
+18A  Visualization
+18B  Process Graph
+18C  Network Graph
+18D  Full Galaxy Graph
+
+
+Yes. **I think you have identified a real architectural drift.** Looking at the original Galaxy goal you pasted, our recent work around `ProcessTree` has started moving us sideways instead of forward.
+
+The important thing is: **we should stop and realign the roadmap before writing more code.**
+
+## Where Galaxy is supposed to be
+
+Your core lifecycle is:
+
+```text
+OBSERVE
+   ↓
+COLLECT
+   ↓
+NORMALIZE
+   ↓
+UNDERSTAND
+   ↓
+CORRELATE
+   ↓
+ANALYZE
+   ↓
+REASON
+   ↓
+RECOMMEND
+   ↓
+APPROVE
+   ↓
+ACT
+```
+
+And the phases you described are about progressively increasing Galaxy's understanding.
+
+---
+
+# Where we actually are
+
+We've done quite a lot:
+
+```text
+Phase 1 — Galaxy can see
+        ↓
+Phase 2 — Galaxy builds memory
+        ↓
+Phase 3 — Galaxy understands entities
+        ↓
+Phase 4 — Galaxy understands the machine
+```
+
+Within that, we've already built:
+
+```text
+System
+Process
+   ↓
+Observation
+   ↓
+SQLite memory
+   ↓
+Relationships
+   ↓
+Process identity
+   ↓
+Lifecycle events
+```
+
+So Galaxy currently knows things like:
+
+```text
+Process
+├── PID
+├── name
+├── CPU
+├── memory
+├── status
+├── user
+├── parent PID
+├── executable
+├── command line
+└── creation time
+```
+
+and it understands:
+
+```text
+Process A
+    │
+    └── parent_of
+          │
+          ▼
+       Process B
+```
+
+and:
+
+```text
+Process started
+Process exited
+```
+
+### That is good.
+
+Those are not wasted milestones.
+
+---
+
+# Where we went slightly wrong
+
+The mistake was treating:
+
+> **"Build a process tree"**
+
+as though it were the next major architectural milestone.
+
+It isn't.
+
+A process tree is primarily a **view/query of information Galaxy already understands**.
+
+We started spending too much architectural attention on:
+
+```text
+ProcessTree
+ProcessTreeDisplay
+tree rendering
+current identity vs historical identity
+```
+
+when the bigger Galaxy architecture says:
+
+```text
+Process
+   ↓
+Network
+   ↓
+Services
+   ↓
+Logs
+   ↓
+Correlation
+```
+
+That is where we should be heading.
+
+---
+
+# There is also an important numbering mismatch
+
+You pasted:
+
+```text
+Milestone 10 — Network Intelligence
+Milestone 11 — Service Intelligence
+Milestone 12 — Logs & Events
+```
+
+But we've been calling our current work:
+
+```text
+10A Identity Map
+10B Identity-aware relationships
+10C Lifecycle Detection
+11A Persist Lifecycle Events
+11B Query Lifecycle Events
+11C Rich Process Tree
+```
+
+So **our internal milestone numbering has drifted away from the original roadmap.**
+
+That's probably the source of your feeling that we're being misled.
+
+You are correct.
+
+---
+
+# What I would do now
+
+Don't throw away the work.
+
+Instead, consider what we've built as **foundational sub-milestones inside Phase 3/4**.
+
+Something like:
+
+```text
+PHASE 1
+Galaxy can see
+│
+├── System observation
+└── Process observation
+        ✅
+        
+PHASE 2
+Galaxy builds memory
+│
+├── SQLite
+├── Observation storage
+└── Historical observations
+        ✅
+
+PHASE 3
+Galaxy understands entities
+│
+├── Process identity
+├── PID + creation time
+├── Parent/child relationships
+└── Process lifecycle
+        ✅
+
+PHASE 4
+Galaxy understands the machine
+│
+├── Network Intelligence       ← NEXT
+├── Service Intelligence
+└── Logs & Events
+```
+
+That makes much more sense.
+
+---
+
+# So what about ProcessTree?
+
+I would **keep your existing code**.
+
+Don't delete it.
+
+It will become useful later when Galaxy has richer information.
+
+For example:
+
+```text
+systemd
+   │
+   ├── sshd
+   │    └── ssh session
+   │
+   ├── nginx
+   │    ├── worker
+   │    └── worker
+   │
+   └── postgres
+        ├── backend
+        └── backend
+```
+
+Eventually Galaxy can combine this with:
+
+```text
+Process
+   │
+   ├── CPU
+   ├── memory
+   ├── network connections
+   ├── open ports
+   ├── service
+   └── logs
+```
+
+Then the process tree becomes much more valuable.
+
+Right now it's basically:
+
+```text
+PID 1
+├── PID 2
+├── PID 43
+└── PID 97
+```
+
+That's useful, but **not the core next capability**.
+
+---
+
+# And your database issue makes even more sense now
+
+We were discussing:
+
+```text
+pid:1@1788950931.18
+```
+
+versus:
+
+```text
+pid:1@1789036041.65
+```
+
+That's actually a good example of why we shouldn't keep polishing the tree yet.
+
+We've already solved the important architectural problem:
+
+> **Galaxy must distinguish different incarnations of the same PID.**
+
+That's what `ProcessIdentityMap` and lifecycle identity accomplished.
+
+We don't need to spend another milestone making the tree perfect.
+
+---
+
+# The next real milestone
+
+According to the architecture you originally defined:
+
+# **Network Intelligence**
+
+Galaxy should discover:
+
+```text
+Network
+├── interfaces
+├── IP addresses
+├── connections
+├── listening ports
+└── endpoints
+```
+
+Then we can establish:
+
+```text
+Process
+   │
+   └── network connection
+           │
+           ├── local address
+           ├── local port
+           ├── remote address
+           └── remote port
+```
+
+Eventually:
+
+```text
+Process
+   │
+   ▼
+Port
+   │
+   ▼
+Network endpoint
+```
+
+And **this is much closer to the "Galaxy understands the machine" goal.**
+
+---
+
+# The revised roadmap from where you are
+
+I would now consider the project to be here:
+
+```text
+                         GALAXY
+                           │
+                           ▼
+              ┌──────────────────────┐
+              │    PHASE 1 — SEE     │
+              └──────────────────────┘
+                           │
+                  System + Processes
+                           │
+                          ✅
+                           ▼
+              ┌──────────────────────┐
+              │  PHASE 2 — REMEMBER  │
+              └──────────────────────┘
+                           │
+                    SQLite memory
+                           │
+                          ✅
+                           ▼
+              ┌──────────────────────┐
+              │ PHASE 3 — UNDERSTAND │
+              └──────────────────────┘
+                           │
+              ┌────────────┼────────────┐
+              │            │            │
+           Identity    Relations    Lifecycle
+              │            │            │
+              └────────────┼────────────┘
+                           ✅
+                           ▼
+              ┌──────────────────────┐
+              │ PHASE 4 — MACHINE    │
+              └──────────────────────┘
+                           │
+                           ▼
+              ⭐ NETWORK INTELLIGENCE
+                           │
+                           ▼
+                  SERVICE INTELLIGENCE
+                           │
+                           ▼
+                    LOGS & EVENTS
+                           │
+                           ▼
+                    CORRELATION
+                           │
+                           ▼
+                       ANALYSIS
+                           │
+                           ▼
+                       REASONING
+                           │
+                           ▼
+                    RECOMMENDATION
+                           │
+                           ▼
+                  APPROVAL / SAFETY
+                           │
+                           ▼
+                         ACTION
+```
+
+## Therefore, I recommend we stop at ProcessTree for now.
+
+Don't add CPU/memory display to it yet.
+
+Don't redesign `ProcessTree`.
+
+Don't add another tree implementation.
+
+**The next thing we should build is Network Intelligence.**
+
+And we should do it the same way we did the process subsystem:
+
+```text
+Network collector
+      ↓
+Network observations
+      ↓
+Normalize
+      ↓
+Store
+      ↓
+Relationships
+      ↓
+Query
+```
+
+Then later we'll connect:
+
+```text
+Process ──────→ Network
+```
+
+That is the point where Galaxy starts becoming a **machine-understanding system**, rather than just a process-monitoring program.
+Excellent. **10A is working correctly.** Your Linux VM has given Galaxy three network interfaces:
+
+```text
+lo
+eth0
+docker0
+```
+
+Let's understand what Galaxy has just discovered before we move on.
+
+---
+
+# 1. `lo` — Loopback
+
+You got:
+
+```text
+interface:lo
+
+127.0.0.1
+::1
+```
+
+`lo` is the machine talking to **itself**.
+
+Think:
+
+```text
+┌─────────────────┐
+│   Your VM       │
+│                 │
+│   application   │
+│       │         │
+│       ▼         │
+│    127.0.0.1    │
+│       │         │
+│       └─────────┘
+│     same VM
+└─────────────────┘
+```
+
+For example, your Flask application might listen on:
+
+```text
+127.0.0.1:5000
+```
+
+That means the service is accessible locally.
+
+---
+
+# 2. `eth0` — Your VM's main network interface
+
+This is the interesting one.
+
+You have:
+
+```text
+eth0
+IPv4: 192.168.238.99
+MAC: 00:15:5d:80:c5:2a
+```
+
+and:
+
+```text
+is_up: True
+speed: 10000
+mtu: 1500
+```
+
+So Galaxy knows:
+
+```text
+eth0
+│
+├── IPv4
+│   └── 192.168.238.99
+│
+├── IPv6
+│   └── fe80::...
+│
+├── MAC
+│   └── 00:15:5d:80:c5:2a
+│
+├── UP
+│   └── yes
+│
+├── Speed
+│   └── 10000
+│
+└── MTU
+    └── 1500
+```
+
+This is already useful machine information.
+
+---
+
+# 3. What is the MAC address?
+
+You saw:
+
+```text
+00:15:5d:80:c5:2a
+```
+
+This is a **MAC address**.
+
+Very simply:
+
+```text
+IP address
+    ↓
+network-level address
+
+MAC address
+    ↓
+network-interface hardware/link address
+```
+
+Because you're running a VM, this is a **virtual network adapter**, not necessarily a physical Ethernet card.
+
+---
+
+# 4. What is `192.168.238.99`?
+
+That's the IPv4 address assigned to your VM's `eth0`.
+
+So conceptually:
+
+```text
+Your VM
+   │
+   └── eth0
+        │
+        └── 192.168.238.99
+```
+
+Other machines/services on the relevant network can use that address to communicate with the VM, subject to the VM/network configuration and firewall.
+
+---
+
+# 5. What is `fe80::...`?
+
+That's an IPv6 address:
+
+```text
+fe80::215:5dff:fe80:c52a%eth0
+```
+
+The important thing for now is simply:
+
+```text
+IPv4 → 192.168.238.99
+IPv6 → fe80::...
+```
+
+We don't need to go deeply into IPv6 yet.
+
+---
+
+# 6. What is MTU?
+
+You have:
+
+```text
+mtu: 1500
+```
+
+MTU means **Maximum Transmission Unit**.
+
+Very roughly:
+
+> The largest packet payload that the interface normally handles at the link layer without fragmentation.
+
+For our first Network Intelligence milestone, Galaxy doesn't need to reason about it. We're simply **observing** it.
+
+---
+
+# 7. `docker0`
+
+This is particularly interesting for Galaxy:
+
+```text
+interface:docker0
+
+IPv4:
+172.17.0.1
+
+is_up:
+False
+```
+
+`docker0` is a Docker bridge interface.
+
+Conceptually:
+
+```text
+             Docker
+                │
+        ┌───────┴───────┐
+        │    docker0    │
+        │ 172.17.0.1    │
+        └───────┬───────┘
+                │
+          Docker containers
+```
+
+Right now yours says:
+
+```text
+is_up: False
+```
+
+so the bridge isn't currently active.
+
+This becomes useful later because Galaxy should eventually understand **containers and their network relationships**.
+
+---
+
+# 8. One thing to notice about `family`
+
+Your collector currently prints:
+
+```text
+'family': '2'
+```
+
+and:
+
+```text
+'family': '10'
+```
+
+and:
+
+```text
+'family': '17'
+```
+
+Those numbers come from the operating system's socket/address-family constants.
+
+They're not very readable.
+
+For Galaxy, I'd rather store:
+
+```text
+IPv4
+IPv6
+MAC
+```
+
+instead of:
+
+```text
+2
+10
+17
+```
+
+That's a small normalization improvement.
+
+For example:
+
+```python
+if address.family == psutil.AF_LINK:
+    family = "MAC"
+elif address.family == 2:
+    family = "IPv4"
+elif address.family == 10:
+    family = "IPv6"
+else:
+    family = str(address.family)
+```
+
+But **don't change it yet**. We can make that cleanup as part of the normalization step.
+
+---
+
+# More importantly: what have we actually achieved?
+
+We have now added a new type of Galaxy observation:
+
+```text
+Process Observation
+       +
+System Observation
+       +
+Network Interface Observation
+```
+
+The architecture is becoming:
+
+```text
+                 GALAXY
+                   │
+          ┌────────┼────────┐
+          │        │        │
+       System    Process  Network
+       Collector Collector Collector
+          │        │        │
+          └────────┼────────┘
+                   ↓
+              Observation
+                   ↓
+              SQLiteStore
+```
+
+That's exactly what we want.
+
+---
+
+# What comes next?
+
+Now we should **integrate 10A into the Orchestrator**.
+
+Currently your Orchestrator probably does roughly:
+
+```text
+SystemCollector
+       ↓
+ProcessCollector
+       ↓
+all_observations
+       ↓
+SQLite
+```
+
+We want:
+
+```text
+SystemCollector
+       │
+ProcessCollector
+       │
+NetworkCollector
+       │
+       ▼
+all_observations
+       │
+       ▼
+SQLite
+```
+
+Then Galaxy's database will contain:
+
+```text
+observations
+│
+├── system
+│
+├── process
+│
+├── process
+│
+├── process
+│
+├── network_interface
+│
+├── network_interface
+└── network_interface
+```
+
+And **after that** we'll move to 10B:
+
+```text
+Listening Ports
+```
+
+which is much more interesting because we'll start getting:
+
+```text
+Process
+   ↓
+? 
+   ↓
+Port 5000
+```
+
+and eventually we'll connect the process to the port.
+
+So the immediate next step is **not ProcessTree** anymore.
+
+It's:
+
+> **10A.2 — Integrate `NetworkCollector` into your existing Orchestrator and verify that the network observations are persisted in SQLite.**
+
+If you paste your **current `orchestrator.py`**, I'll modify your actual version step-by-step rather than giving you a generic replacement.
+
+ 1587  cd ~
+ 1588  exit
+ 1589  mkdir galaxy
+ 1590  cd galaxy
+ 1591  python3 -m venv venv
+ 1592  source venv/bin/activate
+ 1593  nano galaxy/collectors/system.py
+ 1594  mkdir -p nexora/collectors/system
+ 1595  code .
+ 1596  mkdir -p galaxy/collectors/
+ 1597  mkdir -p collectors/
+ 1598  rmdir  galaxy/collectors/
+ 1599  touch main.py
+ 1600  touch collectors/__init__.py
+ 1601  touch collectors/system.py
+ 1602  pip install psutil
+ 1603  nano galaxy/collectors/system.py
+ 1604  python main.py
+ 1605  mkdir -p core/models
+ 1606  touch core/__init__.py
+ 1607  touch core/models/__init__.py
+ 1608  touch core/models/observation.py
+ 1609  python main.py
+ 1610  nano galaxy/core/collectors/base.py
+ 1611  touch galaxy/core/collectors/base.py
+ 1612  find  -maxdepth 4 -type f | sort
+ 1613  exit
+ 1614  cd galaxy
+ 1615  source venv/bin/activate
+ 1616  code .
+ 1617  find  -maxdepth 3 -type f | sort
+ 1618  mkdir galaxy/core/collectors/
+ 1619  mkdir core/collectors/
+ 1620  nano core/collectors/base.py
+ 1621  python main.py
+ 1622  nano collectors/process.py
+ 1623  python main.py
+ 1624  python main.py
+ 1625  yes > /dev/null &
+ 1626  python main.py
+ 1627  kill %1
+ 1628  yes > /dev/null &
+ 1629  python main.py
+ 1630  pkill yes
+ 1631  python main.py
+ 1632  mkdir -p core/storage
+ 1633  nano core/storage/__init__.py
+ 1634  mkdir -p bkup
+ 1635  python main.py
+ 1636  sqlite3 galaxy.db "SELECT COUNT(*) FROM observations;"
+ 1637  sudo apt install sqlite3
+ 1638  sqlite3 galaxy.db "SELECT COUNT(*) FROM observations;"
+ 1639  exit
+ 1640  yes > /dev/null &
+ 1641  yes > /dev/null & yes > /dev/null &
+ 1642  echo $!
+ 1643  exit
+ 1644  cd galaxy
+ 1645  source venv/bin/activate
+ 1646  nano core/orchestrator.py
+ 1647  python main.py
+ 1648  python test_store.py
+ 1649  cd tests
+ 1650  python test_store.py
+ 1651  cd ..
+ 1652  python -m tests.test_store
+ 1653  python main.py
+ 1654  python -m tests.test_store
+ 1655  python main.py
+ 1656  python -m tests.test_store
+ 1657  nano core/models/relationship.py
+ 1658  mkdir core/relationships/
+ 1659  nano core/relationships/process.py
+ 1660  nano tests/test_relationship.py
+ 1661  python -m tests.test_relationship
+ 1662  nano tests/test_relationship_store.py
+ 1663  python -m tests.test_relationship_store
+ 1664  python main.py
+ 1665  python -c "from core.storage.sqlite_store import SQLiteStore; s=SQLiteStore(); print(len(s.all_relationships())); print(s.all_relationships()[-5:])"
+ 1666  nano core/graph/process_tree.py
+ 1667  mkdir core/graph/
+ 1668  nano core/graph/process_tree.py
+ 1669  exit
+ 1670  cd opsmind
+ 1671  cdopsmind-ai
+ 1672  cd opsmind-ai
+ 1673  source venv/bin/activate
+ 1674  sudo systemctl reload nginx
+ 1675  exit
+ 1676  cd nexora
+ 1677  source venv/bin/activate
+ 1678  python main.py
+ 1679  cd ..
+ 1680  code .
+ 1681  cd nexora
+ 1682  python main.py
+ 1683  cd
+ 1684  exit
+ 1685  cd galaxy
+ 1686  source venv/bin/activate
+ 1687  python main.py
+ 1688  code .
+ 1689  nano tests/test_process_tree.py
+ 1690  python -m tests.test_process_tree
+ 1691  nano core/graph/process_tree_display.py
+ 1692  python -m tests.test_process_tree
+ 1693  nano tests/test_process_collector.py
+ 1694  python -m tests.test_process_collector
+ 1695  nano core/models/process_identity.py
+ 1696  nano tests/test_process_identity.py
+ 1697  python -m tests.test_process_identity
+ 1698  python -m tests.test_process_collector
+ 1699  grep -R "parent_of" collectors core -n
+ 1700  find collectors -type f
+ 1701  grep -R "process_relationships" -n .
+ 1702  sed -n '1,100p' core/orchestrator.py
+ 1703  sed -n '1,120p' core/relationships/process.py
+ 1704  nano core/graph/process_identity_map.py
+ 1705  python -m tests.test_identity_relationship
+ 1706  nano tests/test_identity_relationship.py
+ 1707  python -m tests.test_identity_relationship
+ 1708  python main.py
+ 1709  nano core/graph/process_lifecycle.py
+ 1710  nano tests/test_process_lifecycle.py
+ 1711  python -m tests.test_process_lifecycle
+ 1712  python main.py
+ 1713  nano core/models/lifecycle_event.py
+ 1714  nano tests/test_lifecycle_store.py
+ 1715  python -m tests.test_lifecycle_store
+ 1716  exit
+ 1717  cd nexora
+ 1718  source venv/bin/activate
+ 1719  code .
+ 1720  python -m nexora.main
+ 1721  exit
+ 1722  cd opsmind-ai
+ 1723  source venv/bin/activate
+ 1724  uvicorn app:app --host 0.0.0.0 --port 8080
+ 1725  code .
+ 1726  exit
+ 1727  cd galaxy
+ 1728  source venv/bin/activate
+ 1729  code .
+ 1730  python main.py
+ 1731  python -m tests.test_lifecycle_store
+ 1732  grep -R "process_started" .
+ 1733  grep -R "lifecycle["started"]" .
+ 1734  python -m tests.test_lifecycle_store
+ 1735  python -m tests.test_process_tree
+ 1736  python -m tests.test_relationships
+ 1737  python -m tests.test_relationship_store
+ 1738  ip addr
+ 1739  nano collectors/network.py
+ 1740  nano tests/test_network.py
+ 1741  python -m tests.test_network
+ 1742  history
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ — this output explains exactly why your tree had no children.
+
+You have **two generations of relationships in the same database**.
+
+### Old relationships
+
+For example:
+
+```text
+pid:3400 → pid:3404
+pid:3404 → pid:3464
+```
+
+These use the **old identity format**:
+
+```text
+pid:<PID>
+```
+
+### New relationships
+
+Later you have:
+
+```text
+pid:1@1788950931.18 → pid:2@1788950931.23
+pid:1@1788950931.18 → pid:43@1788950931.78
+pid:1@1788950931.18 → pid:97@1788950931.86
+```
+
+These use the **new lifecycle-safe identity format**:
+
+```text
+pid:<PID>@<create_time>
+```
+
+And your current ProcessTree looked for:
+
+```text
+pid:1@1789036041.65
+```
+
+But your database has:
+
+```text
+pid:1@1788950931.18
+```
+
+Those are **different process identities** because the timestamps differ.
+
+---
+
+# Why?
+
+This is actually an important concept in Galaxy.
+
+Your current process:
+
+```text
+PID = 1
+create_time = 1789036041.65
+```
+
+is not necessarily the same process observation as:
+
+```text
+PID = 1
+create_time = 1788950931.18
+```
+
+The PID is the same, but the identity timestamp is different.
+
+So Galaxy correctly says:
+
+```text
+pid:1@1788950931.18
+        ≠
+pid:1@1789036041.65
+```
+
+This is exactly why we introduced lifecycle-safe identities.
+
+---
+
+# So is your current output wrong?
+
+No.
+
+This:
+
+```python
+{
+    'entity_id': 'pid:1@1789036041.65',
+    'children': []
+}
+```
+
+is actually **correct for the current identity**.
+
+The relationships in your database belong to **older observations**.
+
+Your database contains historical process relationships, which is expected because every run saves more observations/relationships.
+
+---
+
+# But there is one architectural issue
+
+Our current `ProcessTree` is asking:
+
+> "Give me the children of this exact process identity."
+
+That's good for historical accuracy.
+
+But when you say:
+
+```python
+tree.get_tree(1)
+```
+
+you probably mean:
+
+> "Show me the current process tree starting from the current PID 1."
+
+The current PID 1 has a new identity:
+
+```text
+pid:1@1789036041.65
+```
+
+and we haven't stored relationships for that particular observation yet.
+
+So there are two concepts:
+
+```text
+Historical tree
+        ↓
+specific entity identity
+pid:1@1788950931.18
+```
+
+versus:
+
+```text
+Current tree
+        ↓
+current PID
+1
+        ↓
+current identity
+pid:1@1789036041.65
+```
+
+We need to decide which one Galaxy's `ProcessTree` should represent.
+
+---
+
+## I recommend this design
+
+For the current milestone, **ProcessTree should represent the current process snapshot**, not the entire historical database.
+
+So we should eventually build it from the **current observations + current relationships**, rather than blindly querying all historical relationships in SQLite.
+
+That avoids this problem:
+
+```text
+SQLite
+├── relationship from yesterday
+├── relationship from yesterday
+├── relationship from this morning
+└── relationship from current run
+```
+
+and makes the tree represent one coherent snapshot.
+
+### In other words:
+
+```text
+Current ProcessCollector
+        ↓
+Current observations
+        ↓
+IdentityMap
+        ↓
+Current relationships
+        ↓
+ProcessTree
+        ↓
+ProcessTreeDisplay
+```
+
+Your existing `ProcessTree` isn't useless — it is a valid **database-backed tree**, but we now need to decide whether it is intended for historical queries or current snapshots.
+
+**I would not change anything yet.** Your output has actually exposed an important design issue that we should solve properly before moving to CPU/memory in the tree.
+
+
+
+Log in
+Sign up for free
+You said:
+
+Yes. Let's start **Network Intelligence properly from the foundation**, not just jump into code.
+
+The goal of this milestone is not yet to make Galaxy "understand the internet." First, Galaxy needs to **observe the network state of the machine** and store it in the same observation system we already built.
+
+# 🌐 What is a network?
+
+In simple terms:
+
+> A network is a way for machines and programs to communicate with each other.
+
+Your Linux VM is connected to a network through one or more **network interfaces**.
+
+Think of your computer as a house:
+
+```text
+                 🌍 Internet
+                     │
+                     │
+              ┌──────┴──────┐
+              │   Network   │
+              │  Interface  │
+              └──────┬──────┘
+                     │
+              ┌──────┴──────┐
+              │ Your Linux  │
+              │    VM       │
+              └─────────────┘
+```
+
+Galaxy needs to discover what's happening at that interface.
+
+---
+
+# 1. What does Galaxy need to know?
+
+For Network Intelligence, we'll progressively discover these things:
+
+```text
+Network
+│
+├── Interfaces
+│   ├── name
+│   ├── state
+│   ├── MAC address
+│   ├── speed
+│   └── statistics
+│
+├── IP addresses
+│   ├── IPv4
+│   └── IPv6
+│
+├── Listening ports
+│   ├── local address
+│   ├── port
+│   └── protocol
+│
+├── Connections
+│   ├── local address
+│   ├── local port
+│   ├── remote address
+│   ├── remote port
+│   └── state
+│
+└── Endpoints
+    └── remote machines
+```
+
+And eventually we want Galaxy to connect these things.
+
+For example:
+
+```text
+nginx process
+      │
+      │ listens on
+      ▼
+TCP port 80
+      │
+      │ receives connection from
+      ▼
+192.168.1.20:54321
+```
+
+That's where the architecture gets interesting.
+
+---
+
+# 2. First concept: Network Interface
+
+An **interface** is basically a network connection point on your machine.
+
+Run this on your Linux VM:
+
+```bash
+ip addr
+```
+
+You'll probably see things such as:
+
+```text
+lo
+eth0
+ens33
+enp0s3
+```
+
+depending on your VM configuration.
+
+### `lo`
+
+`lo` means **loopback**.
+
+It represents the computer talking to itself.
+
+For example:
+
+```text
+127.0.0.1
+```
+
+means:
+
+```text
+this machine
+```
+
+### `eth0` / `ens33` / `enp0s3`
+
+These are physical or virtual network interfaces.
+
+Your VM might have something like:
+
+```text
+eth0
+    IPv4: 192.168.x.x
+```
+
+This is how the VM communicates with other machines.
+
+---
+
+# 3. Second concept: IP address
+
+An IP address identifies a network location.
+
+For example:
+
+```text
+192.168.1.50
+```
+
+or:
+
+```text
+10.0.0.15
+```
+
+There are two major versions:
+
+```text
+IPv4
+192.168.1.50
+
+IPv6
+fe80::1234:abcd:5678
+```
+
+For our first implementation, we'll collect both.
+
+---
+
+# 4. Third concept: Port
+
+This is extremely important for Galaxy.
+
+An IP address identifies a machine/network location.
+
+A **port identifies a communication endpoint on that machine.**
+
+Think:
+
+```text
+IP address = building address
+
+Port = apartment/room number
+```
+
+For example:
+
+```text
+192.168.1.50:8080
+```
+
+means:
+
+```text
+machine = 192.168.1.50
+port    = 8080
+```
+
+Common examples:
+
+```text
+22    SSH
+80    HTTP
+443   HTTPS
+5432  PostgreSQL
+3306  MySQL
+```
+
+Galaxy will eventually discover these rather than assuming them.
+
+---
+
+# 5. Fourth concept: Listening port
+
+A program can **listen** for incoming network connections.
+
+For example:
+
+```text
+Python Flask
+      │
+      ▼
+127.0.0.1:5000
+      │
+      └── LISTENING
+```
+
+This means:
+
+> "There is a program waiting for somebody to connect to port 5000."
+
+This is extremely useful for Galaxy because we eventually want:
+
+```text
+Port 5000
+    ↓
+Which process owns it?
+    ↓
+Python
+    ↓
+Which application?
+    ↓
+Galaxy application understanding
+```
+
+---
+
+# 6. Fifth concept: Network connection
+
+A connection is an actual communication relationship.
+
+For example:
+
+```text
+192.168.1.50:5000
+        │
+        │ TCP
+        ▼
+192.168.1.100:42135
+```
+
+There are two sides:
+
+```text
+Local side
+192.168.1.50:5000
+
+Remote side
+192.168.1.100:42135
+```
+
+And the connection has a state.
+
+For TCP, examples include:
+
+```text
+LISTEN
+ESTABLISHED
+TIME_WAIT
+CLOSE_WAIT
+```
+
+We don't need to implement every network concept at once.
+
+---
+
+# 7. Our first Network Intelligence milestone
+
+Let's divide Network Intelligence into smaller steps.
+
+### 10A — Network interfaces
+
+Galaxy learns:
+
+```text
+Interface
+├── name
+├── MAC address
+├── state
+├── IPv4
+└── IPv6
+```
+
+### 10B — Listening ports
+
+Galaxy learns:
+
+```text
+Port
+├── protocol
+├── local address
+├── local port
+└── status
+```
+
+### 10C — Network connections
+
+Galaxy learns:
+
+```text
+Connection
+├── protocol
+├── local address
+├── local port
+├── remote address
+├── remote port
+└── state
+```
+
+### 10D — Process → Network
+
+Then the important relationship:
+
+```text
+Process
+   │
+   └── owns/uses
+          ↓
+       Port
+          ↓
+      Connection
+          ↓
+       Endpoint
+```
+
+We'll do these **one at a time**.
+
+---
+
+# 🚀 Start with 10A — Network Interfaces
+
+We already have a generic observation architecture.
+
+Remember:
+
+```text
+SystemCollector
+ProcessCollector
+       │
+       ▼
+Observation
+       │
+       ▼
+SQLiteStore
+```
+
+We want:
+
+```text
+NetworkCollector
+       │
+       ▼
+Observation
+       │
+       ▼
+SQLiteStore

@@ -1,0 +1,5556 @@
+Response 1
+
+Yes. And looking at the code you just posted, you have already implemented most of what I was calling Milestone 5. So we should not rewrite it unnecessarily.
+
+Your current code is already doing the core pipeline:
+
+Collectors
+    ↓
+collect()
+    ↓
+list[Observation]
+    ↓
+all_observations
+    ↓
+SQLiteStore.save()
+    ↓
+galaxy.db
+
+The run_once() function is essentially your first Observation Pipeline.
+
+Let's step back and establish the complete Galaxy roadmap first, then we'll make Milestone 5 clean and intentional.
+
+🌌 GALAXY — Our Complete Plan
+
+The most important thing is that you understand where we're going before we keep adding code.
+
+The overall idea is:
+
+Galaxy observes a machine, builds a structured understanding of it, correlates what it sees, reasons about problems, and eventually can recommend or safely perform actions.
+
+The architecture in your original design follows the same broad lifecycle: observe → collect → normalize → understand → correlate → analyze → reason → recommend → approve → act.
+
+We're going to implement that progressively.
+
+PHASE 1 — 🌌 Galaxy can see
+Milestone 1 — Basic System Observation ✅
+
+We started with:
+
+Galaxy
+  ↓
+SystemCollector
+  ↓
+CPU
+RAM
+Disk
+
+You got:
+
+CPU: 1.5%
+Memory: 30.3%
+Disk: 3.8%
+Purpose
+
+Teach Galaxy:
+
+"I can observe the machine."
+
+Milestone 2 — Observation Model ✅
+
+We introduced:
+
+Observation
+
+with:
+
+Observation
+├── source
+├── entity_type
+├── entity_id
+├── timestamp
+└── data
+Purpose
+
+Instead of random dictionaries, Galaxy now has a standard language for observations.
+
+For example:
+
+source = system
+entity_type = host
+entity_id = localhost
+timestamp = ...
+data = {...}
+Milestone 3 — Collector Interface ✅
+
+We created:
+
+class Collector(ABC):
+
+with:
+
+collect()
+
+Then:
+
+Collector
+   │
+   ├── SystemCollector
+   ├── ProcessCollector
+   ├── NetworkCollector
+   └── ...
+Purpose
+
+Establish a consistent contract:
+
+Every collector knows how to collect observations.
+
+Milestone 4A — Host Intelligence ✅
+
+Galaxy learned:
+
+Host
+├── CPU
+├── Memory
+├── Disk
+├── OS
+├── OS version
+├── Hostname
+└── Uptime
+Purpose
+
+Galaxy knows what environment it is running in.
+
+Milestone 4B — Process Intelligence ✅
+
+We added:
+
+ProcessCollector
+
+and discovered:
+
+PID
+Name
+CPU
+Memory
+
+You also solved an important architectural problem:
+
+SystemCollector
+      ↓
+1 Observation
+
+ProcessCollector
+      ↓
+Many Observations
+
+So we changed:
+
+collect() -> Observation
+
+to:
+
+collect() -> list[Observation]
+Purpose
+
+Galaxy can now understand that a machine contains multiple entities, not just one host.
+
+Milestone 5 — Observation Pipeline 🚧
+
+And this is where you are now.
+
+Your current code already does:
+
+for collector in collectors:
+    all_observations.extend(collector.collect())
+
+store.save(all_observations)
+
+That means:
+
+              GALAXY
+                 │
+                 ▼
+            run_once()
+                 │
+       ┌─────────┴─────────┐
+       ▼                   ▼
+SystemCollector     ProcessCollector
+       │                   │
+       ▼                   ▼
+1 Observation       N Observations
+       │                   │
+       └─────────┬─────────┘
+                 ▼
+        all_observations
+                 │
+                 ▼
+           SQLiteStore
+                 │
+                 ▼
+             galaxy.db
+
+So yes: you're already at Milestone 5.
+
+We just need to cleanly establish it as an actual component rather than leaving the orchestration logic inside main.py.
+
+What comes after Milestone 5?
+
+This is the important part.
+
+PHASE 2 — 🌌 Galaxy builds memory
+Milestone 6 — Observation Repository / Querying
+
+Currently SQLite can:
+
+store.save(...)
+store.all()
+
+But Galaxy needs to ask questions like:
+
+What observations happened recently?
+
+What is the latest CPU reading?
+
+What processes exist?
+
+What was process PID 4217 doing 5 minutes ago?
+
+Show me observations for this entity.
+
+Show me all process observations.
+
+So we'll introduce proper querying.
+
+Eventually:
+
+SQLite
+   ↓
+Observation Store
+   ↓
+Queries
+
+This gives Galaxy memory.
+
+Milestone 7 — Time-Series Thinking
+
+Right now we're storing snapshots.
+
+For example:
+
+12:00 CPU = 10%
+12:00 processes = ...
+12:10 CPU = 30%
+12:10 processes = ...
+12:20 CPU = 80%
+12:20 processes = ...
+
+Now Galaxy can start seeing change over time.
+
+That's crucial because:
+
+CPU = 80%
+
+isn't necessarily a problem.
+
+But:
+
+20%
+30%
+40%
+60%
+80%
+95%
+
+suggests a trend.
+
+Purpose
+
+Move from:
+
+"What is happening?"
+
+to:
+
+"What has been happening?"
+
+PHASE 3 — 🌌 Galaxy understands entities
+Milestone 8 — Entity Identity
+
+Right now:
+
+entity_id = pid:4217
+
+That's a useful beginning, but PID alone isn't a perfect long-term identity.
+
+A process can disappear:
+
+PID 4217 → python
+
+and later:
+
+PID 4217 → completely different process
+
+So we'll eventually think about:
+
+host
+process
+service
+application
+database
+network endpoint
+container
+
+and their relationships.
+
+Purpose
+
+Galaxy needs to understand:
+
+What exactly am I looking at?
+
+Milestone 9 — Process Intelligence
+
+We'll expand process observations:
+
+Process
+├── PID
+├── name
+├── executable
+├── CPU
+├── memory
+├── status
+├── username
+├── command line
+├── parent PID
+└── creation time
+
+Then Galaxy can build:
+
+python
+   │
+   ├── PID
+   ├── parent
+   ├── CPU
+   ├── RAM
+   └── executable
+PHASE 4 — 🌌 Galaxy understands the machine
+Milestone 10 — Network Intelligence
+
+Galaxy discovers:
+
+Network
+├── interfaces
+├── IP addresses
+├── connections
+├── listening ports
+└── endpoints
+
+Then:
+
+Process
+   ↓
+Port
+   ↓
+Network connection
+
+becomes possible.
+
+Milestone 11 — Service Intelligence
+
+Linux first:
+
+systemd
+   │
+   ├── nginx
+   ├── PostgreSQL
+   ├── Docker
+   └── ...
+
+Later Windows support can use its native service mechanisms.
+
+Galaxy's internal representation remains:
+
+Service
+├── name
+├── state
+├── startup configuration
+└── associated process
+Milestone 12 — Logs & Events
+
+We'll introduce:
+
+Log/Event
+├── timestamp
+├── source
+├── severity
+├── message
+├── process
+└── event ID
+
+Now Galaxy can connect:
+
+CPU spike
+   ↓
+Process spike
+   ↓
+Application
+   ↓
+Error log
+
+This is where things become much more interesting.
+
+PHASE 5 — 🌌 Galaxy understands applications
+Milestone 13 — Application Discovery
+
+Galaxy shouldn't just see:
+
+PID 4217
+
+It should eventually understand:
+
+Application
+   │
+   ├── processes
+   ├── ports
+   ├── configuration
+   ├── logs
+   └── dependencies
+
+For example:
+
+Django Application
+      │
+      ├── Python process
+      ├── port 8000
+      ├── PostgreSQL
+      └── logs
+Milestone 14 — Database Intelligence
+
+Eventually:
+
+PostgreSQL
+├── connections
+├── queries
+├── locks
+├── slow queries
+├── tables
+├── indexes
+└── health
+
+Then Galaxy can understand relationships:
+
+Application
+      │
+      ▼
+PostgreSQL
+      │
+      ▼
+slow query
+      │
+      ▼
+application latency
+PHASE 6 — 🧠 Galaxy starts understanding
+Milestone 15 — Correlation Engine
+
+This is one of the biggest milestones.
+
+We go from:
+
+Observation
+Observation
+Observation
+Observation
+
+to:
+
+                 CORRELATION
+                     │
+       ┌─────────────┼─────────────┐
+       ▼             ▼             ▼
+     System       Process       Logs
+       │             │             │
+       └─────────────┼─────────────┘
+                     ▼
+                  Pattern
+
+Example:
+
+CPU = 96%
+     ↓
+Python PID 4217 = 88%
+     ↓
+Application = Galaxy API
+     ↓
+PostgreSQL query latency increased
+     ↓
+Application log contains timeout
+
+Galaxy now has a story, rather than isolated numbers.
+
+Milestone 16 — Anomaly Detection
+
+Galaxy starts asking:
+
+Is this normal?
+
+Instead of:
+
+CPU > 90%
+
+being automatically considered bad.
+
+For example:
+
+CPU 95%
+
+might be completely normal during compilation.
+
+But:
+
+CPU normally 10–20%
+       ↓
+suddenly 95%
+       ↓
+stays there for 15 minutes
+
+is much more interesting.
+
+PHASE 7 — 🤖 Galaxy gets a brain
+Milestone 17 — LLM Integration
+
+Only now do we introduce the LLM.
+
+The LLM shouldn't directly inspect the machine.
+
+Instead:
+
+Machine
+   ↓
+Collectors
+   ↓
+Observations
+   ↓
+Storage
+   ↓
+Correlation
+   ↓
+Relevant context
+   ↓
+LLM
+
+The LLM receives structured evidence.
+
+For example:
+
+Host CPU: 96%
+
+Process:
+python PID 4217
+CPU: 88%
+
+Application:
+Galaxy API
+
+Database:
+slow queries increased 4x
+
+Logs:
+timeout errors increased
+
+Then the LLM can reason:
+
+These observations suggest the Python application may be contributing to the CPU spike and database latency.
+
+That's much safer and more reliable than letting the LLM blindly run commands.
+
+Your architecture explicitly separates structured observability from the LLM reasoning layer.
+
+PHASE 8 — 🛠️ Galaxy recommends
+Milestone 18 — Recommendations
+
+Now Galaxy can say:
+
+Problem detected:
+High CPU
+
+Likely contributor:
+Python PID 4217
+
+Evidence:
+CPU 88%
+Sustained for 15 minutes
+
+Recommendation:
+Investigate Python application request processing.
+
+Notice:
+
+It doesn't automatically kill the process.
+
+PHASE 9 — 🔐 Controlled actions
+Milestone 19 — Approval / Permission
+
+Before action:
+
+Galaxy
+   ↓
+Recommendation
+   ↓
+User approval
+   ↓
+Permission check
+   ↓
+Action
+
+This is where safety becomes very important.
+
+Milestone 20 — Action + Verification
+
+Eventually:
+
+RECOMMEND
+    ↓
+APPROVE
+    ↓
+ACT
+    ↓
+VERIFY
+
+For example:
+
+Problem:
+Service unhealthy
+
+Action:
+Restart service
+
+Verification:
+Service is running
+Health check passes
+CPU returns to normal
+
+The original architecture also emphasizes permission-aware, reversible, auditable actions and verification after changes.
+
+🌌 The whole Galaxy journey
+
+So the complete roadmap is:
+
+PHASE 1 — SEE
+────────────────────────
+1.  Basic system observation       ✅
+2.  Observation model              ✅
+3.  Collector interface            ✅
+4A. Host intelligence              ✅
+4B. Process discovery              ✅
+5.  Observation pipeline           🚧
+
+
+PHASE 2 — REMEMBER
+────────────────────────
+6.  Observation repository
+7.  Historical/time-series queries
+
+
+PHASE 3 — UNDERSTAND ENTITIES
+────────────────────────
+8.  Entity identity
+9.  Process intelligence
+
+
+PHASE 4 — UNDERSTAND MACHINE
+────────────────────────
+10. Network intelligence
+11. Service intelligence
+12. Logs & events
+
+
+PHASE 5 — UNDERSTAND APPLICATIONS
+────────────────────────
+13. Application discovery
+14. Database intelligence
+
+
+PHASE 6 — UNDERSTAND RELATIONSHIPS
+────────────────────────
+15. Correlation engine
+16. Anomaly detection
+
+
+PHASE 7 — REASON
+────────────────────────
+17. LLM integration
+
+
+PHASE 8 — RECOMMEND
+────────────────────────
+18. Recommendations
+
+
+PHASE 9 — CONTROL
+────────────────────────
+19. Approval / permissions
+20. Action + verification
+Now, specifically: Milestone 5
+
+Your code is already functionally there.
+
+The code:
+
+def run_once(collectors, store):
+
+    all_observations = []
+
+    for collector in collectors:
+        all_observations.extend(collector.collect())
+
+    store.save(all_observations)
+
+    return len(all_observations), len(store.all())
+
+is doing this:
+
+run_once()
+    │
+    ├── SystemCollector.collect()
+    │        ↓
+    │    [Observation]
+    │
+    ├── ProcessCollector.collect()
+    │        ↓
+    │    [Observation, Observation, ...]
+    │
+    ├── combine them
+    │        ↓
+    │    all_observations
+    │
+    └── store.save()
+             ↓
+         galaxy.db
+
+So don't throw this away.
+
+The next improvement is to extract that responsibility from main.py into something like:
+
+core/
+└── pipeline/
+    └── observation_pipeline.py
+
+Then:
+
+main.py
+   │
+   ▼
+ObservationPipeline
+   │
+   ├── SystemCollector
+   ├── ProcessCollector
+   └── SQLiteStore
+
+That gives us a clean separation:
+
+main.py
+    = application entry point
+
+Collector
+    = observe machine
+
+Observation
+    = represent observation
+
+Pipeline
+    = move observations through Galaxy
+
+SQLiteStore
+    = persist observations
+
+That is what I recommend we implement next.
+
+And importantly, we won't add any new functionality yet. We'll simply take the code you've already written and turn it into a properly separated Milestone 5 pipeline, explaining every line and why the separation matters.
+
+I prefer this response
+ChatGPT
+
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+Response 2
+
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+Yes. And your current main.py is already very close to what I was calling Milestone 5.
+
+In fact, looking at your code:
+
+for collector in collectors:
+    all_observations.extend(collector.collect())
+
+store.save(all_observations)
+
+you have already implemented the basic collection pipeline/orchestration.
+
+So I don't want you to rewrite it unnecessarily. First let's understand where we are, what the complete Galaxy plan is, and then we'll make Milestone 5 cleaner rather than blindly adding code.
+
+🌌 Galaxy — the complete plan
+
+Our ultimate idea is:
+
+                         🌌 GALAXY
+                              │
+                              ▼
+                    ┌──────────────────┐
+                    │    OBSERVE        │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │     COLLECT       │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │    NORMALIZE      │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │     STORE         │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │    UNDERSTAND     │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │    CORRELATE      │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │     ANALYZE       │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │   AI / REASON     │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │   RECOMMEND       │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │     APPROVE       │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │      ACT         │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │     VERIFY       │
+                    └──────────────────┘
+
+This follows the lifecycle in your Galaxy specification: observe → collect → normalize → understand → correlate → analyze → reason → recommend → approve → act.
+
+We are deliberately building the bottom of this architecture first.
+
+🗺️ Our milestones
+
+Here's the roadmap I want us to follow.
+
+Milestone 1 — Basic System Observation ✅
+
+We started with:
+
+Galaxy
+   ↓
+SystemCollector
+   ↓
+CPU
+RAM
+Disk
+
+You completed this.
+
+Your output was:
+
+CPU: 1.5%
+Memory: 30.3%
+Disk: 3.8%
+Purpose
+
+Teach Galaxy to see the machine.
+
+Milestone 2 — Observation Model ✅
+
+We created:
+
+@dataclass
+class Observation:
+    source: str
+    entity_type: str
+    entity_id: str
+    timestamp: datetime
+    data: dict
+
+Now Galaxy doesn't just have random dictionaries.
+
+It has a concept:
+
+An Observation is a fact Galaxy observed about an entity at a particular time.
+
+Completed.
+
+Milestone 3 — Collector Interface ✅
+
+We created:
+
+class Collector(ABC):
+
+    @abstractmethod
+    def collect(self) -> list[Observation]:
+        ...
+
+This establishes a contract:
+
+Every Collector
+      ↓
+collect()
+      ↓
+list[Observation]
+
+Completed.
+
+Milestone 4A — Host Information ✅
+
+We expanded the system observation:
+
+HOST
+├── CPU
+├── Memory
+├── Disk
+├── OS
+├── OS version
+├── Hostname
+└── Uptime
+
+Completed.
+
+Milestone 4B — Process Discovery ✅
+
+We added:
+
+ProcessCollector
+
+and Galaxy can discover:
+
+PID
+Name
+CPU
+Memory
+
+More importantly, we discovered an architectural truth:
+
+SystemCollector
+      ↓
+1 Observation
+
+ProcessCollector
+      ↓
+Many Observations
+
+That led us to change:
+
+Observation
+
+into:
+
+list[Observation]
+
+for the collector contract.
+
+Completed.
+
+Milestone 5 — Collection Pipeline 🔄
+
+This is where you are now.
+
+And here's the good news:
+
+You have already built the basic version.
+
+Your code:
+
+def run_once(collectors, store):
+
+    all_observations = []
+
+    for collector in collectors:
+        all_observations.extend(collector.collect())
+
+    store.save(all_observations)
+
+    return len(all_observations), len(store.all())
+
+is essentially:
+
+Collector 1
+     ↓
+Observations
+     │
+Collector 2
+     ↓
+Observations
+     │
+     └──────────┐
+                ▼
+       all_observations
+                │
+                ▼
+           SQLiteStore
+                │
+                ▼
+             galaxy.db
+
+And this:
+
+while True:
+    collected, total = run_once(collectors, store)
+    ...
+    time.sleep(10)
+
+gives Galaxy continuous observation.
+
+That's a major step.
+
+So what exactly is missing from Milestone 5?
+
+Not much.
+
+The current code works, but we want to establish the concept cleanly:
+
+                 Galaxy Pipeline
+                       │
+                       ▼
+                  Collector Manager
+                       │
+            ┌──────────┼──────────┐
+            ▼          ▼          ▼
+          System     Process     Future...
+            │          │
+            ▼          ▼
+        Observations Observations
+            │          │
+            └────┬─────┘
+                 ▼
+             Persistence
+                 │
+                 ▼
+              SQLite
+
+The important thing is that main.py should eventually be the application entry point, not the place where all Galaxy logic lives.
+
+Your run_once() is already the beginning of that separation.
+
+Before we continue: one architectural correction
+
+Your current SQLiteStore has:
+
+def all(self):
+    cursor = self.conn.execute(
+        "SELECT source, entity_type, entity_id, timestamp, data FROM observations"
+    )
+    return cursor.fetchall()
+
+That's okay for testing.
+
+But your run_once() does:
+
+len(store.all())
+
+every 10 seconds.
+
+Suppose we eventually have:
+
+100,000 observations
+
+then:
+
+store.all()
+
+loads all of them just to count them.
+
+That's inefficient.
+
+Eventually we'll change that to something like:
+
+COUNT(*) 
+
+But not yet.
+
+We don't want to start optimizing before the architecture is stable.
+
+Milestone 6 — Observation Querying
+
+This is our next logical step after Milestone 5.
+
+Right now Galaxy can:
+
+COLLECT
+   ↓
+STORE
+
+But Galaxy can't intelligently ask its own database:
+
+What processes exist?
+
+What happened to PID 4217?
+
+What was CPU usage 5 minutes ago?
+
+Show me all observations for this host.
+
+Show me process observations.
+
+Show me the latest observation.
+
+So we'll build a small query layer.
+
+Conceptually:
+
+                galaxy.db
+                    │
+                    ▼
+              ObservationStore
+                    │
+        ┌───────────┼───────────┐
+        ▼           ▼           ▼
+     latest()    find()      history()
+
+This is important because later correlation depends on being able to retrieve observations.
+
+Milestone 7 — Process Intelligence
+
+We currently know:
+
+PID
+Name
+CPU
+Memory
+
+We'll expand this to:
+
+Process
+├── PID
+├── Name
+├── CPU
+├── Memory
+├── Status
+├── Username
+├── Executable
+├── Command line
+├── Parent PID
+└── Create time
+
+Then we'll start answering:
+
+Who is consuming CPU?
+
+Who is consuming memory?
+
+Who started this process?
+
+What is its parent?
+
+Is it still alive?
+
+This moves Galaxy from process discovery toward process intelligence.
+
+Milestone 8 — Network Intelligence
+
+Then:
+
+NetworkCollector
+
+Galaxy discovers:
+
+Interfaces
+IP addresses
+Connections
+Listening ports
+Remote endpoints
+
+Conceptually:
+
+Process
+   │
+   ├── PID 4217
+   │
+   ├── listening port 5000
+   │
+   └── connection → PostgreSQL
+
+Now relationships start appearing.
+
+Milestone 9 — Services
+
+Linux first:
+
+systemd
+   │
+   ├── nginx
+   ├── postgresql
+   └── docker
+
+We'll represent them as Galaxy entities:
+
+Service
+├── name
+├── status
+├── startup type
+└── process
+
+Later we can add Windows implementation without changing the core model.
+
+Milestone 10 — Logs
+
+We'll introduce:
+
+LogCollector
+
+and normalize logs into something like:
+
+LogEvent
+├── timestamp
+├── source
+├── severity
+├── message
+├── process
+└── event_id
+
+Now Galaxy has another source of evidence.
+
+Milestone 11 — Application Intelligence
+
+This is where things get much more interesting.
+
+Galaxy should start recognizing:
+
+Python application
+PostgreSQL
+Redis
+Nginx
+Docker
+...
+
+instead of treating everything as unrelated processes.
+
+For example:
+
+Application: Galaxy
+   │
+   ├── PID 4217
+   ├── Port 5000
+   ├── CPU 12%
+   ├── Memory 200 MB
+   └── Logs
+
+This connects directly to the application intelligence layer in your specification.
+
+Milestone 12 — Database Intelligence
+
+Then Galaxy can understand databases:
+
+PostgreSQL
+├── connections
+├── queries
+├── locks
+├── tables
+├── indexes
+└── health
+
+And eventually:
+
+Application
+      │
+      ▼
+Database
+
+becomes an explicit relationship.
+
+Milestone 13 — Entity & Relationship Model
+
+This is a very important milestone.
+
+At this point Galaxy has:
+
+Host
+Process
+Application
+Service
+Database
+Network
+Log
+
+We need to represent relationships:
+
+Host
+ │
+ ├── runs → Process
+ │
+ ├── runs → Service
+ │
+ └── contains → Application
+
+Application
+ │
+ ├── uses → Database
+ │
+ ├── listens_on → Port
+ │
+ └── produces → Logs
+
+Now Galaxy starts building its system graph.
+
+This is the foundation for real correlation.
+
+Milestone 14 — Correlation Engine
+
+Now we can connect evidence.
+
+Example:
+
+CPU = 95%
+      │
+      ▼
+Python PID 4217 = 88% CPU
+      │
+      ▼
+Application = Galaxy
+      │
+      ▼
+PostgreSQL connection count increased
+      │
+      ▼
+Logs show slow queries
+
+Instead of looking at isolated metrics, Galaxy sees a chain.
+
+That's the transition from:
+
+monitoring
+
+to:
+
+understanding.
+
+Milestone 15 — Analysis / Anomaly Detection
+
+Then Galaxy can calculate:
+
+normal CPU
+baseline CPU
+current CPU
+trend
+anomaly
+
+For example:
+
+Normal CPU: 20–40%
+Current: 95%
+Duration: 8 minutes
+
+Galaxy can classify this as an anomaly.
+
+Milestone 16 — AI Reasoning
+
+Only now do we bring in the LLM.
+
+The LLM should receive structured evidence such as:
+
+SYSTEM
+CPU: 95%
+
+PROCESS
+python PID 4217
+CPU: 88%
+
+APPLICATION
+Galaxy
+Port: 5000
+
+DATABASE
+PostgreSQL
+Connections: 97
+
+LOGS
+Slow query events: 24
+
+Then the LLM can reason:
+
+The high host CPU is primarily attributable to the Galaxy Python process. Recent database activity and slow-query events may be contributing.
+
+The LLM is reasoning over facts Galaxy collected, rather than trying to monitor the operating system itself.
+
+That's consistent with your original architecture's separation between deterministic observation/collection and AI reasoning.
+
+Milestone 17 — Recommendations
+
+Galaxy produces:
+
+Finding
+   ↓
+Evidence
+   ↓
+Likely cause
+   ↓
+Recommendation
+
+Example:
+
+Finding:
+High CPU usage
+
+Evidence:
+Python PID 4217 consuming 88%
+
+Recommendation:
+Investigate the Galaxy worker responsible for sustained CPU consumption.
+Milestone 18 — Approval & Policy
+
+Before Galaxy can touch the machine:
+
+AI recommendation
+       ↓
+Risk assessment
+       ↓
+Permission / policy
+       ↓
+Human approval
+
+This becomes especially important for dangerous operations.
+
+Milestone 19 — Controlled Actions
+
+Only then:
+
+restart service
+kill process
+rotate logs
+clear cache
+...
+
+But actions must be controlled.
+
+Milestone 20 — Verification
+
+After an action:
+
+Action
+  ↓
+Execute
+  ↓
+Collect again
+  ↓
+Compare before/after
+  ↓
+Did it work?
+
+For example:
+
+BEFORE
+CPU = 95%
+
+restart service
+
+AFTER
+CPU = 31%
+
+Verification = SUCCESS
+
+This closes the loop.
+
+🌌 The entire Galaxy journey
+
+So remember this picture:
+
+                    🌌 GALAXY
+                       │
+                       ▼
+                 1. OBSERVE
+                       │
+                       ▼
+                 2. COLLECT
+                       │
+                       ▼
+                3. NORMALIZE
+                       │
+                       ▼
+                  4. STORE
+                       │
+                       ▼
+                 5. QUERY
+                       │
+                       ▼
+             6. PROCESS INTELLIGENCE
+                       │
+                       ▼
+              7. NETWORK INTELLIGENCE
+                       │
+                       ▼
+                8. SERVICES
+                       │
+                       ▼
+                  9. LOGS
+                       │
+                       ▼
+             10. APPLICATIONS
+                       │
+                       ▼
+              11. DATABASES
+                       │
+                       ▼
+             12. SYSTEM GRAPH
+                       │
+                       ▼
+               13. CORRELATION
+                       │
+                       ▼
+                14. ANALYSIS
+                       │
+                       ▼
+                15. AI REASONING
+                       │
+                       ▼
+              16. RECOMMENDATION
+                       │
+                       ▼
+                17. APPROVAL
+                       │
+                       ▼
+                  18. ACTION
+                       │
+                       ▼
+                19. VERIFY
+
+We're currently around #4/#5.
+
+And that's intentional.
+
+So what should we do RIGHT NOW?
+
+Your current code is already a working Milestone 5 prototype:
+
+def run_once(collectors, store):
+    all_observations = []
+
+    for collector in collectors:
+        all_observations.extend(collector.collect())
+
+    store.save(all_observations)
+
+    return len(all_observations), len(store.all())
+
+I would not throw it away.
+
+Instead, our next task should be to make the pipeline explicit:
+
+Collector
+    ↓
+Collection
+    ↓
+Observation list
+    ↓
+Persistence
+
+and then test that:
+
+SystemCollector → 1 observation
+ProcessCollector → N observations
+                     ↓
+              SQLiteStore
+                     ↓
+                 galaxy.db
+One thing I want you to verify first
+
+Run your current Galaxy:
+
+python main.py
+
+Let it run for 2–3 collection cycles, then press:
+
+Ctrl+C
+
+You should see something like:
+
+GALAXY
+======
+
+Collecting every 10 seconds. Press Ctrl+C to stop.
+
+[12:40:01] Collected 250 observations (total in storage: 250)
+[12:40:11] Collected 251 observations (total in storage: 501)
+[12:40:21] Collected 249 observations (total in storage: 750)
+
+Galaxy stopped.
+
+If you get that, then Milestone 5's basic pipeline is working.
+
+Then we'll make the small architectural cleanup rather than rewriting working code.
+
+The next real milestone after that will be querying the observations, 
+because Galaxy must first be able to retrieve and understand the data it has collected before we start adding more collectors and eventually correlation.
+
+
+
+
+
+New chat
+
+Search chats
+Images
+Plugins
+
+Deep research
+See plans and pricing
+
+Settings
+Help
+Get responses tailored to you
+Log in to get answers based on saved chats, plus create images and upload files.
+
+
+Log in
+
+Log in
+
+Sign up for free
+You said:
+
+from core.orchestrator import run_once
+import time
+
+COLLECTION_INTERVAL_SECONDS = 10
+
+
+def main():
+    
+
+    print("GALAXY")
+    print("======")
+    print(f"Collecting every {COLLECTION_INTERVAL_SECONDS} seconds. Press Ctrl+C to stop.")
+    print()
+
+    try:
+        while True:
+            collected, total = run_once(collectors, store)
+
+            timestamp = time.strftime("%H:%M:%S")
+            print(f"[{timestamp}] Collected {collected} observations "
+                  f"(total in storage: {total})")
+
+            time.sleep(COLLECTION_INTERVAL_SECONDS)
+
+    except KeyboardInterrupt:
+        print()
+        print("Galaxy stopped.")
+
+        
+if __name__ == "__main__":
+    main()       
+from collectors.system import SystemCollector
+from collectors.process import ProcessCollector
+from core.storage.sqlite_store import SQLiteStore
+
+class Orchestrator:
+
+    collectors = [
+        SystemCollector(),
+        ProcessCollector(),
+        ]
+
+    
+    store = SQLiteStore()
+
+    def __init__(self, collectors, store):
+        self.collectors = collectors
+        self.store = store
+
+     
+
+    def run_once(self):
+        all_observations = []
+
+        for collector in self.collectors:
+            observations = collector.collect()
+            all_observations.extend(observations)
+
+        self.store.save(all_observations)
+
+        return all_observations
+(venv) marsh@Marshall:~/galaxy$ python main.py
+Traceback (most recent call last):
+  File "/home/marsh/galaxy/main.py", line 2, in <module>
+    from core.orchestrator import run_once
+ImportError: cannot import name 'run_once' from 'core.orchestrator' (/home/marsh/galaxy/core/orchestrator.py)
+(venv) marsh@Marshall:~/galaxy$
+
+ChatGPT said:
+You have a mismatch between what main.py is trying to import/call and what core/orchestrator.py actually defines.
+
+The problem
+In main.py you have:
+
+from core.orchestrator import run_once
+
+But orchestrator.py only defines a method called run_once inside the Orchestrator class:
+
+class Orchestrator:
+    ...
+    def run_once(self):
+        ...
+
+There is no module-level function named run_once, so Python correctly raises:
+
+ImportError: cannot import name 'run_once'
+
+You also have a second issue: main.py uses collectors and store, but those aren't defined there.
+
+Recommended fix
+Make an Orchestrator instance and call its method.
+
+Change main.py to:
+
+from core.orchestrator import Orchestrator
+import time
+
+COLLECTION_INTERVAL_SECONDS = 10
+
+
+def main():
+    orchestrator = Orchestrator(
+        Orchestrator.collectors,
+        Orchestrator.store
+    )
+
+    print("GALAXY")
+    print("======")
+    print(f"Collecting every {COLLECTION_INTERVAL_SECONDS} seconds. Press Ctrl+C to stop.")
+    print()
+
+    try:
+        while True:
+            observations = orchestrator.run_once()
+
+            timestamp = time.strftime("%H:%M:%S")
+            print(
+                f"[{timestamp}] Collected "
+                f"{len(observations)} observations"
+            )
+
+            time.sleep(COLLECTION_INTERVAL_SECONDS)
+
+    except KeyboardInterrupt:
+        print()
+        print("Galaxy stopped.")
+
+
+if __name__ == "__main__":
+    main()
+
+However, I'd actually recommend cleaning up Orchestrator too.
+
+Your current class has:
+
+class Orchestrator:
+
+    collectors = [
+        SystemCollector(),
+        ProcessCollector(),
+    ]
+
+    store = SQLiteStore()
+
+Those are class attributes, meaning every Orchestrator instance shares the same collectors and storage.
+
+A cleaner design is:
+
+from collectors.system import SystemCollector
+from collectors.process import ProcessCollector
+from core.storage.sqlite_store import SQLiteStore
+
+
+class Orchestrator:
+
+    def __init__(self):
+        self.collectors = [
+            SystemCollector(),
+            ProcessCollector(),
+        ]
+        self.store = SQLiteStore()
+
+    def run_once(self):
+        all_observations = []
+
+        for collector in self.collectors:
+            observations = collector.collect()
+            all_observations.extend(observations)
+
+        self.store.save(all_observations)
+
+        return all_observations
+
+Then main.py becomes much simpler:
+
+from core.orchestrator import Orchestrator
+import time
+
+COLLECTION_INTERVAL_SECONDS = 10
+
+
+def main():
+    orchestrator = Orchestrator()
+
+    print("GALAXY")
+    print("======")
+    print(f"Collecting every {COLLECTION_INTERVAL_SECONDS} seconds. Press Ctrl+C to stop.")
+    print()
+
+    try:
+        while True:
+            observations = orchestrator.run_once()
+
+            timestamp = time.strftime("%H:%M:%S")
+            print(
+                f"[{timestamp}] Collected "
+                f"{len(observations)} observations"
+            )
+
+            time.sleep(COLLECTION_INTERVAL_SECONDS)
+
+    except KeyboardInterrupt:
+        print()
+        print("Galaxy stopped.")
+
+
+if __name__ == "__main__":
+    main()
+
+One more thing
+Your original main.py expects:
+
+collected, total = run_once(collectors, store)
+
+But your Orchestrator.run_once() returns only:
+
+return all_observations
+
+So even after fixing the import, that original line would fail because you're expecting two values from a function that returns one.
+
+If you want the output to remain:
+
+[13:16:20] Collected 5 observations (total in storage: 42)
+
+then run_once() should return both collected and total. That depends on what your SQLiteStore.save() currently returns. If you paste sqlite_store.py, I can show you the cleanest version of the three files together.
+
+
+
+Log in for personalized, step-by-step guidance.
+
+
+Log in
+
+Sign up for free
+You said:
+
+Milestone 6 — Observation Querying
+Core idea
+
+Your SQLiteStore currently has:
+
+def all(self):
+    ...
+
+This basically says:
+
+"Give me everything in the database."
+
+But that's not how we'll use the database as Galaxy grows.
+
+We want the store to answer specific questions.
+
+Eventually:
+
+SQLiteStore
+     │
+     ├── all()
+     │
+     ├── latest()
+     │
+     ├── find_by_entity()
+     │
+     ├── find_by_type()
+     │
+     └── history()
+Step 6.1 — First understand what is actually in galaxy.db
+
+Before writing a query method, let's inspect the data.
+
+Your database contains rows like:
+
+id | source   | entity_type | entity_id   | timestamp | data
+---+----------+-------------+-------------+-----------+----------------
+1  | system   | host        | localhost   | ...       | {...}
+2  | process  | process     | pid:1       | ...       | {...}
+3  | process  | process     | pid:2       | ...       | {...}
+4  | process  | process     | pid:100     | ...       | {...}
+...
+
+And after many cycles:
+
+Cycle 1
+ ├── host
+ ├── pid:1
+ ├── pid:2
+ ├── pid:3
+ └── ...
+
+Cycle 2
+ ├── host
+ ├── pid:1
+ ├── pid:2
+ ├── pid:3
+ └── ...
+
+So your database is already becoming a time series of observations.
+
+That's important.Step 6.3 — Why are we doing this now?
+
+Your Orchestrator currently doesn't need to know how many observations exist.
+
+But during development, it's useful to verify:
+
+Cycle 1 → 77
+Cycle 2 → 79
+Cycle 3 → 77
+
+and:
+
+Database total → 233
+
+The store should provide that information.
+
+So the responsibility becomes:
+
+Orchestrator
+    │
+    └── "save these observations"
+
+SQLiteStore
+    │
+    ├── save()
+    ├── count()
+    └── later: queries   how to do that   import sqlite3
+import json
+from core.models.observation import Observation
+
+
+class SQLiteStore:
+
+    def __init__(self, db_path: str = "galaxy.db"):
+        self.conn = sqlite3.connect(db_path)
+        self._create_table()
+
+    def _create_table(self):
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT,
+                entity_type TEXT,
+                entity_id TEXT,
+                timestamp TEXT,
+                data TEXT
+            )
+        """)
+        self.conn.commit()
+
+    def save(self, observations: list[Observation]):
+        rows = [
+            (
+                obs.source,
+                obs.entity_type,
+                obs.entity_id,
+                obs.timestamp.isoformat(),
+                json.dumps(obs.data),
+            )
+            for obs in observations
+        ]
+
+        self.conn.executemany(
+            """
+            INSERT INTO observations
+                (source, entity_type, entity_id, timestamp, data)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        self.conn.commit()
+
+    def all(self):
+        cursor = self.conn.execute(
+            "SELECT source, entity_type, entity_id, timestamp, data FROM observations"
+        )
+        return cursor.fetchall()
+
+
+    def count(self):
+    cursor = self.conn.execute(
+        "SELECT COUNT(*) FROM observations"
+    )
+
+    return cursor.fetchone()[0]
+
+
+    def latest(self):
+    cursor = self.conn.execute(
+        """
+        SELECT source, entity_type, entity_id, timestamp, data
+        FROM observations
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    )
+
+    return cursor.fetchone()
+
+    def find_by_entity(self, entity_type, entity_id):
+    cursor = self.conn.execute(
+        """
+        SELECT source, entity_type, entity_id, timestamp, data
+        FROM observations
+        WHERE entity_type = ?
+          AND entity_id = ?
+        ORDER BY timestamp ASC
+        """,
+        (entity_type, entity_id),
+    )
+
+    return cursor.fetchall()
+
+ChatGPT said:
+Yes — you're on Milestone 6, and your logic is basically right. The immediate problem is indentation in count(), latest(), and find_by_entity().
+
+Python requires the method body to be indented underneath def.
+
+1. Fix sqlite_store.py
+Your file should look like this:
+
+import sqlite3
+import json
+from core.models.observation import Observation
+
+
+class SQLiteStore:
+
+    def __init__(self, db_path: str = "galaxy.db"):
+        self.conn = sqlite3.connect(db_path)
+        self._create_table()
+
+    def _create_table(self):
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT,
+                entity_type TEXT,
+                entity_id TEXT,
+                timestamp TEXT,
+                data TEXT
+            )
+        """)
+        self.conn.commit()
+
+    def save(self, observations: list[Observation]):
+        rows = [
+            (
+                obs.source,
+                obs.entity_type,
+                obs.entity_id,
+                obs.timestamp.isoformat(),
+                json.dumps(obs.data),
+            )
+            for obs in observations
+        ]
+
+        self.conn.executemany(
+            """
+            INSERT INTO observations
+                (source, entity_type, entity_id, timestamp, data)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        self.conn.commit()
+
+    def all(self):
+        cursor = self.conn.execute(
+            """
+            SELECT source, entity_type, entity_id, timestamp, data
+            FROM observations
+            """
+        )
+
+        return cursor.fetchall()
+
+    def count(self):
+        cursor = self.conn.execute(
+            "SELECT COUNT(*) FROM observations"
+        )
+
+        return cursor.fetchone()[0]
+
+    def latest(self):
+        cursor = self.conn.execute(
+            """
+            SELECT source, entity_type, entity_id, timestamp, data
+            FROM observations
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        )
+
+        return cursor.fetchone()
+
+    def find_by_entity(self, entity_type, entity_id):
+        cursor = self.conn.execute(
+            """
+            SELECT source, entity_type, entity_id, timestamp, data
+            FROM observations
+            WHERE entity_type = ?
+              AND entity_id = ?
+            ORDER BY timestamp ASC
+            """,
+            (entity_type, entity_id),
+        )
+
+        return cursor.fetchall()
+
+The important difference is this:
+
+def count():
+    cursor = ...
+    return ...
+
+not:
+
+def count():
+cursor = ...
+return ...
+
+2. What each method does
+You now have four useful database questions.
+
+all()
+store.all()
+
+Means:
+
+Give me every observation.
+
+For example:
+
+[
+    ('system', 'host', 'localhost', '...', '{...}'),
+    ('process', 'process', 'pid:1', '...', '{...}'),
+    ('process', 'process', 'pid:2', '...', '{...}')
+]
+
+count()
+store.count()
+
+Means:
+
+How many observations are stored?
+
+It returns a number:
+
+233
+
+This is particularly useful for your collection loop.
+
+latest()
+store.latest()
+
+Means:
+
+Give me the most recently inserted observation.
+
+This part:
+
+ORDER BY id DESC
+LIMIT 1
+
+puts the newest database row first and returns only one.
+
+find_by_entity()
+store.find_by_entity("process", "pid:1234")
+
+Means:
+
+Give me the history of this particular entity.
+
+Because you have:
+
+WHERE entity_type = ?
+  AND entity_id = ?
+
+the database will only return matching observations.
+
+And:
+
+ORDER BY timestamp ASC
+
+means oldest → newest.
+
+That's exactly what you want for eventually displaying an entity's history.
+
+3. Test it
+You can temporarily create something like test_store.py:
+
+from core.storage.sqlite_store import SQLiteStore
+
+
+store = SQLiteStore()
+
+print("TOTAL:")
+print(store.count())
+
+print()
+
+print("LATEST:")
+print(store.latest())
+
+print()
+
+print("ALL:")
+for observation in store.all():
+    print(observation)
+
+Then:
+
+python test_store.py
+
+You should see something along the lines of:
+
+TOTAL:
+233
+
+LATEST:
+('process', 'process', 'pid:1234', '2026-09-08T13:15:42...', '{"name": "..."}')
+
+ALL:
+('system', 'host', 'localhost', ...)
+('process', 'process', 'pid:1', ...)
+...
+
+4. One important thing about your main.py
+Earlier, your main.py wanted this:
+
+collected, total = run_once(collectors, store)
+
+Your current Orchestrator.run_once() only returns:
+
+return all_observations
+
+Now that you have count(), you can make the orchestrator return exactly what your main loop wants:
+
+def run_once(self):
+    all_observations = []
+
+    for collector in self.collectors:
+        observations = collector.collect()
+        all_observations.extend(observations)
+
+    self.store.save(all_observations)
+
+    return len(all_observations), self.store.count()
+
+Then:
+
+collected, total = orchestrator.run_once()
+
+gives you:
+
+Cycle 1 → collected = 77, total = 77
+Cycle 2 → collected = 79, total = 156
+Cycle 3 → collected = 77, total = 233
+
+And your output can be:
+
+[13:20:10] Collected 77 observations (total in storage: 77)
+[13:20:20] Collected 79 observations (total in storage: 156)
+[13:20:30] Collected 77 observations (total in storage: 233)
+
+That fits the goal of Milestone 6.3 very well: the Orchestrator collects and saves, while the SQLiteStore knows how many observations exist.
+
+One small architectural note: I'd keep count() in the store rather than having the orchestrator maintain a counter itself. The database is the source of truth.
+
+Absolutely. And this is a good moment to pause before moving on, because **these fields are the foundation for Galaxy's process intelligence**.
+
+ You now have a process observation like:
+
+```
+PID 39038
+├── name: python
+├── CPU: 3.9%
+├── memory: 0.2167%
+├── status: running
+├── username: marsh
+├── parent_pid: 1539
+├── executable: /usr/bin/python3.12
+└── command_line: ['python', 'main.py']
+```
+
+ Each field answers a different question.
+
+ ## 1\. `pid` — Which process is this?
+
+```
+pid: 39038
+```
+
+ PID means **Process ID**.
+
+ Linux assigns each running process an integer ID.
+
+ For Galaxy, this is the primary identity of the process:
+
+```
+entity_id = "pid:39038"
+```
+
+ So when Galaxy asks:
+
+```
+store.find_by_entity("process", "pid:39038")
+```
+
+ it's saying:
+
+ > Show me the history of this process.
+
+ ### Why we need it
+
+ Without the PID, you can't reliably distinguish processes.
+
+ You could have:
+
+```
+python
+python
+python
+python
+```
+
+ but their PIDs are different:
+
+```
+python → 39038
+python → 40122
+python → 41287
+```
+
+ So:
+
+```
+PID = identity
+```
+
+---
+
+ # 2\. `name` — What is the process called?
+
+ You have:
+
+```
+name: python
+```
+
+ This is the process name reported by the operating system.
+
+ Examples:
+
+```
+python
+sshd
+bash
+chrome
+systemd
+postgres
+nginx
+```
+
+ ### Why we need it
+
+ PID tells us **which instance**.
+
+ Name tells us **what kind of process it is**.
+
+ For example:
+
+```
+pid:39038 → python
+pid:39101 → python
+pid:40001 → nginx
+```
+
+ Now Galaxy can reason about categories of processes.
+
+ For example:
+
+ > How many Python processes are running?
+
+ Or:
+
+ > Which Python processes are consuming CPU?
+
+---
+
+ # 3\. `cpu_percent` — How busy is it?
+
+ You have:
+
+```
+cpu_percent: 3.9
+```
+
+ This tells us approximately how much CPU the process used during the measurement interval.
+
+ For example:
+
+```
+python → 3.9%
+chrome → 18.2%
+postgres → 72.4%
+```
+
+ ### Why we need it
+
+ This is where **behavior over time** becomes interesting.
+
+ One observation:
+
+```
+CPU = 3%
+```
+
+ doesn't tell us much.
+
+ But your history could become:
+
+```
+10:00 → 3%
+10:10 → 4%
+10:20 → 5%
+10:30 → 82%
+10:40 → 91%
+```
+
+ Now Galaxy can potentially say:
+
+ > Something changed around 10:30.
+
+ That's the beginning of anomaly detection.
+
+---
+
+ # 4\. `memory_percent` — How much memory?
+
+ You have:
+
+```
+memory_percent: 0.2167
+```
+
+ This is the percentage of physical system memory associated with the process.
+
+ For example:
+
+```
+python → 0.2%
+chrome → 4.8%
+database → 12.7%
+```
+
+ ### Why we need it
+
+ CPU isn't the only resource that can become problematic.
+
+ Consider:
+
+```
+CPU:     2%
+Memory:  35%
+```
+
+ That process isn't CPU-heavy, but it might be consuming a significant amount of RAM.
+
+ And again, history is more useful than a single number:
+
+```
+10:00 → 2%
+10:10 → 4%
+10:20 → 8%
+10:30 → 15%
+10:40 → 35%
+```
+
+ Galaxy can eventually detect:
+
+ > Memory consumption is steadily increasing.
+
+ That could be useful for identifying possible memory leaks.
+
+---
+
+ # 5\. `status` — What state is the process in?
+
+ You now have:
+
+```
+status: running
+```
+
+ A process can have different states.
+
+ For example:
+
+```
+running
+sleeping
+stopped
+zombie
+```
+
+ ### Why we need it
+
+ CPU and memory don't tell the whole story.
+
+ Imagine:
+
+```
+PID: 4217
+CPU: 0%
+status: zombie
+```
+
+ That's very different from:
+
+```
+PID: 4217
+CPU: 0%
+status: sleeping
+```
+
+ A sleeping process may be perfectly normal.
+
+ A zombie process indicates a process that has terminated but whose parent hasn't collected its exit status.
+
+ So `status` gives Galaxy **context** around the numbers.
+
+---
+
+ # 6\. `username` — Who owns the process?
+
+ Your process says:
+
+```
+username: marsh
+```
+
+ This tells us which operating-system user owns the process.
+
+ You might have:
+
+```
+python → marsh
+postgres → postgres
+nginx → www-data
+systemd → root
+```
+
+ ### Why we need it
+
+ Now Galaxy can connect:
+
+```
+process
+   ↓
+user
+```
+
+ For example:
+
+```
+PID 39038
+username = marsh
+```
+
+ means:
+
+ > This process is running under the `marsh` account.
+
+ That becomes particularly interesting for security and auditing.
+
+ Galaxy could eventually answer questions like:
+
+ > Which processes are running as root?
+
+ or:
+
+ > Which processes belong to a particular user?
+
+---
+
+ # 7\. `parent_pid` — Who started this process?
+
+ This is one of the **most important fields** we just added.
+
+ You have:
+
+```
+parent_pid: 1539
+```
+
+ Meaning process `39038` has process `1539` as its parent.
+
+ So:
+
+```
+PID 1539
+   │
+   └── PID 39038
+```
+
+ This creates a relationship.
+
+ And this is a major transition for Galaxy.
+
+ Before:
+
+```
+PID 39038
+CPU 3.9%
+```
+
+ Now:
+
+```
+PID 39038
+   │
+   └── parent → PID 1539
+```
+
+ We have **structure**, not just measurements.
+
+ ### Why this matters
+
+ Imagine:
+
+```
+systemd
+   │
+   └── sshd
+         │
+         └── bash
+               │
+               └── python
+```
+
+ Those relationships tell us a story about how processes came into existence.
+
+ Eventually Galaxy can reconstruct this as a process tree.
+
+---
+
+ # 8\. `executable` — What actual program is running?
+
+ You have:
+
+```
+executable: /usr/bin/python3.12
+```
+
+ This is the executable file associated with the process.
+
+ Compare:
+
+```
+name: python
+```
+
+ with:
+
+```
+executable: /usr/bin/python3.12
+```
+
+ The name is a simple label.
+
+ The executable tells us **what binary is actually being executed**.
+
+ ### Why we need it
+
+ This becomes useful when names are ambiguous.
+
+ For example:
+
+```
+name: python
+```
+
+ doesn't tell you whether you're running:
+
+```
+/usr/bin/python3
+```
+
+ or:
+
+```
+/usr/local/bin/python3.12
+```
+
+ or perhaps another executable with a similar process name.
+
+ Galaxy can eventually reason about the actual executable involved.
+
+---
+
+ # 9\. `command_line` — How was it launched?
+
+ Your process has:
+
+```
+command_line: ['python', 'main.py']
+```
+
+ This is particularly valuable.
+
+ It tells us the arguments used to launch the process.
+
+ For example:
+
+```
+python main.py
+```
+
+ becomes:
+
+```
+['python', 'main.py']
+```
+
+ Another process might be:
+
+```
+python worker.py --port 8080
+```
+
+ giving something like:
+
+```
+[
+    "python",
+    "worker.py",
+    "--port",
+    "8080"
+]
+```
+
+ ### Why this matters
+
+ The executable tells you:
+
+ > What program is running?
+
+ The command line tells you:
+
+ > **How was it invoked?**
+
+ That's much richer information.
+
+---
+
+ # Putting everything together
+
+ This is where the fields become more powerful **together**.
+
+ Your current observation:
+
+```
+PID 39038
+```
+
+ can be expanded into:
+
+```
+PID 39038
+│
+├── name
+│   └── python
+│
+├── CPU
+│   └── 3.9%
+│
+├── memory
+│   └── 0.2167%
+│
+├── status
+│   └── running
+│
+├── username
+│   └── marsh
+│
+├── parent
+│   └── PID 1539
+│
+├── executable
+│   └── /usr/bin/python3.12
+│
+└── command line
+    └── python main.py
+```
+
+ Now Galaxy knows **identity, behavior, ownership, origin, and execution details**.
+
+ That's dramatically more useful than:
+
+```
+PID 39038 → CPU 3.9%
+```
+
+---
+
+ # And this is where history becomes powerful
+
+ Because you're already storing observations every 10 seconds, Galaxy can eventually see:
+
+```
+10:00
+PID 39038
+CPU 3%
+Memory 0.2%
+Status running
+
+10:10
+PID 39038
+CPU 4%
+Memory 0.2%
+Status running
+
+10:20
+PID 39038
+CPU 5%
+Memory 0.3%
+Status running
+
+10:30
+PID 39038
+CPU 87%
+Memory 4.8%
+Status running
+
+10:40
+PID 39038
+CPU 92%
+Memory 7.2%
+Status running
+```
+
+ Now we have a **behavioral history**.
+
+ And because we also know:
+
+```
+parent_pid
+username
+executable
+command_line
+```
+
+ Galaxy can eventually ask much richer questions:
+
+ > Which process suddenly started consuming CPU?
+
+ > Who launched it?
+
+ > Which user owns it?
+
+ > What executable is responsible?
+
+ > What command line was used?
+
+ > What happened to its CPU and memory before the spike?
+
+ > What other processes share its parent?
+
+ That's the transition from **monitoring → intelligence**.
+
+---
+
+ # The architecture you're building
+
+ This is actually a very nice progression:
+
+```
+Milestone 3
+   ↓
+Collect data
+
+Milestone 5
+   ↓
+Store data
+
+Milestone 6
+   ↓
+Query data
+
+Milestone 7
+   ↓
+Understand processes
+
+Future
+   ↓
+Understand relationships
+
+Future
+   ↓
+Detect unusual behavior
+
+Future
+   ↓
+Correlate events
+```
+
+ And the key thing is that we're **not throwing away the architecture you built earlier**.
+
+ Your collector produces:
+
+```
+Observation(...)
+```
+
+ Your store persists it.
+
+ Your query layer retrieves it.
+
+ And now we're gradually making the `data` inside those observations richer.
+
+ So yes: **what you just added is much more than four extra fields. You're giving Galaxy the raw material it needs to understand a process as an entity with identity, behavior, ownership, ancestry, and execution context.** 🌌
+
+ The natural next step after you've absorbed this is to use `parent_pid` to create the first real **relationship layer: parent → child process**.
+
+Perfect. **7A is completed correctly.** ✅
+
+You have now proven that Galaxy can derive:
+
+```text
+process:pid:1539
+        │
+        │ parent_of
+        ▼
+process:pid:39038
+```
+
+Now we'll continue with **7B and 7C**, but in the same careful style: first persistence, then integration.
+
+---
+
+# 🌌 Milestone 7B — Store Relationships
+
+## Core idea
+
+Right now Galaxy can **create** a relationship:
+
+```text
+Observation
+    ↓
+Relationship
+```
+
+but the relationship disappears when the Python program ends.
+
+For example, your test created:
+
+```text
+1539 parent_of 39038
+```
+
+but it isn't in `galaxy.db`.
+
+So 7B answers:
+
+> **How does Galaxy remember relationships?**
+
+We will give relationships their own database table.
+
+---
+
+# 7B — Step 1: Add a relationship table
+
+Open:
+
+```text
+core/storage/sqlite_store.py
+```
+
+Your database currently has:
+
+```text
+observations
+```
+
+We'll add:
+
+```text
+relationships
+```
+
+The database becomes:
+
+```text
+galaxy.db
+│
+├── observations
+│
+└── relationships
+```
+
+---
+
+## Updated `sqlite_store.py`
+
+Keep your existing code and add the relationship table and methods.
+
+```python
+import sqlite3
+import json
+
+from core.models.observation import Observation
+from core.models.relationship import Relationship
+
+
+class SQLiteStore:
+
+    def __init__(self, db_path: str = "galaxy.db"):
+        self.conn = sqlite3.connect(db_path)
+
+        self._create_observations_table()
+        self._create_relationships_table()
+
+    # -------------------------
+    # Observations
+    # -------------------------
+
+    def _create_observations_table(self):
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT,
+                entity_type TEXT,
+                entity_id TEXT,
+                timestamp TEXT,
+                data TEXT
+            )
+        """)
+
+        self.conn.commit()
+
+    def save(self, observations: list[Observation]):
+        rows = [
+            (
+                obs.source,
+                obs.entity_type,
+                obs.entity_id,
+                obs.timestamp.isoformat(),
+                json.dumps(obs.data),
+            )
+            for obs in observations
+        ]
+
+        self.conn.executemany(
+            """
+            INSERT INTO observations
+                (source, entity_type, entity_id, timestamp, data)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+
+        self.conn.commit()
+
+    def all(self):
+        cursor = self.conn.execute(
+            """
+            SELECT source, entity_type, entity_id, timestamp, data
+            FROM observations
+            """
+        )
+
+        return cursor.fetchall()
+
+    def count(self):
+        cursor = self.conn.execute(
+            "SELECT COUNT(*) FROM observations"
+        )
+
+        return cursor.fetchone()[0]
+
+    # -------------------------
+    # Relationships
+    # -------------------------
+
+    def _create_relationships_table(self):
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS relationships (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_entity_type TEXT,
+                source_entity_id TEXT,
+                relationship_type TEXT,
+                target_entity_type TEXT,
+                target_entity_id TEXT,
+                timestamp TEXT
+            )
+        """)
+
+        self.conn.commit()
+
+    def save_relationships(
+        self,
+        relationships: list[Relationship],
+    ):
+        rows = [
+            (
+                relationship.source_entity_type,
+                relationship.source_entity_id,
+                relationship.relationship_type,
+                relationship.target_entity_type,
+                relationship.target_entity_id,
+                relationship.timestamp.isoformat(),
+            )
+            for relationship in relationships
+        ]
+
+        self.conn.executemany(
+            """
+            INSERT INTO relationships (
+                source_entity_type,
+                source_entity_id,
+                relationship_type,
+                target_entity_type,
+                target_entity_id,
+                timestamp
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+
+        self.conn.commit()
+
+    def all_relationships(self):
+        cursor = self.conn.execute(
+            """
+            SELECT
+                source_entity_type,
+                source_entity_id,
+                relationship_type,
+                target_entity_type,
+                target_entity_id,
+                timestamp
+            FROM relationships
+            ORDER BY id ASC
+            """
+        )
+
+        return cursor.fetchall()
+```
+
+---
+
+# Understand what we just added
+
+The important part is:
+
+```python
+def _create_relationships_table(self):
+```
+
+This creates:
+
+```text
+relationships
+```
+
+with:
+
+```text
+id
+source_entity_type
+source_entity_id
+relationship_type
+target_entity_type
+target_entity_id
+timestamp
+```
+
+So one row might become:
+
+```text
+source_entity_type = process
+source_entity_id   = pid:1539
+
+relationship_type  = parent_of
+
+target_entity_type = process
+target_entity_id   = pid:39038
+
+timestamp          = ...
+```
+
+Think of it as:
+
+```text
+FROM                RELATIONSHIP       TO
+──────────────────────────────────────────────
+process:pid:1539    parent_of          process:pid:39038
+```
+
+---
+
+# Why a separate table?
+
+Because these are two different things.
+
+### Observations
+
+```text
+"The process used 3.9% CPU."
+```
+
+### Relationships
+
+```text
+"Process 1539 is the parent of process 39038."
+```
+
+So:
+
+```text
+observations
+     ↓
+facts about entities
+
+relationships
+     ↓
+connections between entities
+```
+
+Keeping them separate gives us a cleaner architecture.
+
+---
+
+# 7B — Step 2: Test relationship storage
+
+Now create:
+
+```text
+tests/test_relationship_store.py
+```
+
+Use:
+
+```python
+from datetime import datetime, timezone
+
+from core.models.relationship import Relationship
+from core.storage.sqlite_store import SQLiteStore
+
+
+store = SQLiteStore()
+
+relationship = Relationship(
+    source_entity_type="process",
+    source_entity_id="pid:1539",
+
+    relationship_type="parent_of",
+
+    target_entity_type="process",
+    target_entity_id="pid:39038",
+
+    timestamp=datetime.now(timezone.utc),
+)
+
+store.save_relationships([relationship])
+
+relationships = store.all_relationships()
+
+print("Relationships:")
+
+for item in relationships:
+    print(item)
+```
+
+Run:
+
+```bash
+python -m tests.test_relationship_store
+```
+
+You should see something similar to:
+
+```text
+Relationships:
+
+(
+    'process',
+    'pid:1539',
+    'parent_of',
+    'process',
+    'pid:39038',
+    '2026-09-08T...'
+)
+```
+
+If you see that, **7B is working**.
+
+---
+
+# 🌌 Now Milestone 7C — Integrate Relationships into Galaxy
+
+This is where it becomes interesting.
+
+Until now:
+
+```text
+ProcessCollector
+      ↓
+Observation
+      ↓
+SQLiteStore
+```
+
+And separately:
+
+```text
+Observation
+      ↓
+RelationshipExtractor
+      ↓
+Relationship
+      ↓
+SQLiteStore
+```
+
+But Galaxy itself isn't connecting those two flows.
+
+7C makes the Orchestrator responsible for the complete pipeline.
+
+---
+
+# 7C — New flow
+
+The new flow becomes:
+
+```text
+                    Orchestrator
+                         │
+                         ▼
+                    Collector
+                         │
+                         ▼
+                  Observations
+                    /        \
+                   /          \
+                  ▼            ▼
+             Save facts    Derive relationships
+                  │            │
+                  ▼            ▼
+           observations   relationships
+                  │            │
+                  └─────┬──────┘
+                        ▼
+                    galaxy.db
+```
+
+This is the important architectural step.
+
+---
+
+# 7C — Step 1: Update Orchestrator
+
+Open:
+
+```text
+core/orchestrator.py
+```
+
+Your current version is approximately:
+
+```python
+class Orchestrator:
+
+    def __init__(self):
+        self.collectors = [
+            SystemCollector(),
+            ProcessCollector(),
+        ]
+
+        self.store = SQLiteStore()
+
+    def run_once(self):
+        all_observations = []
+
+        for collector in self.collectors:
+            observations = collector.collect()
+            all_observations.extend(observations)
+
+        self.store.save(all_observations)
+
+        return all_observations
+```
+
+Now we add the relationship extractor.
+
+---
+
+# Updated `orchestrator.py`
+
+```python
+from collectors.system import SystemCollector
+from collectors.process import ProcessCollector
+
+from core.storage.sqlite_store import SQLiteStore
+from core.relationships.process import process_relationships
+
+
+class Orchestrator:
+
+    def __init__(self):
+        self.collectors = [
+            SystemCollector(),
+            ProcessCollector(),
+        ]
+
+        self.store = SQLiteStore()
+
+    def run_once(self):
+
+        all_observations = []
+        all_relationships = []
+
+        # -------------------------
+        # 1. Collect observations
+        # -------------------------
+
+        for collector in self.collectors:
+
+            observations = collector.collect()
+
+            all_observations.extend(observations)
+
+        # -------------------------
+        # 2. Save observations
+        # -------------------------
+
+        self.store.save(all_observations)
+
+        # -------------------------
+        # 3. Derive relationships
+        # -------------------------
+
+        for observation in all_observations:
+
+            if observation.entity_type == "process":
+
+                relationships = process_relationships(
+                    observation
+                )
+
+                all_relationships.extend(relationships)
+
+        # -------------------------
+        # 4. Save relationships
+        # -------------------------
+
+        self.store.save_relationships(
+            all_relationships
+        )
+
+        return all_observations, all_relationships
+```
+
+---
+
+# Let's understand this carefully
+
+## Part 1
+
+```python
+all_observations = []
+```
+
+This is our collection bucket.
+
+Then:
+
+```python
+all_relationships = []
+```
+
+is our relationship bucket.
+
+So:
+
+```text
+all_observations
+       +
+all_relationships
+```
+
+are two different outputs from the same collection cycle.
+
+---
+
+# Part 2 — Collect
+
+```python
+for collector in self.collectors:
+
+    observations = collector.collect()
+
+    all_observations.extend(observations)
+```
+
+This is what you already understand from Milestone 5.
+
+For example:
+
+```text
+SystemCollector
+       ↓
+1 observation
+
+ProcessCollector
+       ↓
+77 observations
+```
+
+Therefore:
+
+```text
+all_observations = 78
+```
+
+---
+
+# Part 3 — Save observations
+
+```python
+self.store.save(all_observations)
+```
+
+So:
+
+```text
+78 observations
+       ↓
+observations table
+```
+
+---
+
+# Part 4 — Derive relationships
+
+Now:
+
+```python
+for observation in all_observations:
+```
+
+We inspect each observation.
+
+Then:
+
+```python
+if observation.entity_type == "process":
+```
+
+We only currently know how to derive relationships from processes.
+
+So:
+
+```text
+host observation
+     ↓
+skip
+
+process observation
+     ↓
+process_relationships()
+```
+
+Later we'll have:
+
+```text
+network observation
+     ↓
+network_relationships()
+
+service observation
+     ↓
+service_relationships()
+
+application observation
+     ↓
+application_relationships()
+```
+
+That's why we are creating this layer now.
+
+---
+
+# Part 5 — Relationship extraction
+
+For this observation:
+
+```text
+PID = 39038
+parent_pid = 1539
+```
+
+our function returns:
+
+```text
+process:pid:1539
+       │
+       │ parent_of
+       ▼
+process:pid:39038
+```
+
+We add it to:
+
+```python
+all_relationships
+```
+
+---
+
+# Part 6 — Save relationships
+
+Finally:
+
+```python
+self.store.save_relationships(
+    all_relationships
+)
+```
+
+So now:
+
+```text
+Relationships
+      ↓
+relationships table
+```
+
+---
+
+# 🌌 Your complete Galaxy pipeline now
+
+After 7C:
+
+```text
+                         🌌 GALAXY
+                              │
+                              ▼
+                       Orchestrator
+                              │
+                              ▼
+                         Collectors
+                         /         \
+                        /           \
+                       ▼             ▼
+                  System           Process
+                     │                │
+                     ▼                ▼
+               Observation      Observations
+                     │                │
+                     └───────┬────────┘
+                             ▼
+                       Save observations
+                             │
+                             ▼
+                       observations
+                             │
+                             │
+                    derive relationships
+                             │
+                             ▼
+                      Relationships
+                             │
+                             ▼
+                      relationships
+```
+
+And `galaxy.db` now contains:
+
+```text
+galaxy.db
+│
+├── observations
+│
+│   ├── host
+│   ├── process 1539
+│   ├── process 39038
+│   └── ...
+│
+└── relationships
+    │
+    ├── 1539 parent_of 39038
+    ├── ...
+    └── ...
+```
+
+---
+
+# ⚠️ One change needed in `main.py`
+
+Because `run_once()` now returns **two things**:
+
+```python
+return all_observations, all_relationships
+```
+
+your current code:
+
+```python
+observations = orchestrator.run_once()
+```
+
+needs to change.
+
+Use:
+
+```python
+observations, relationships = orchestrator.run_once()
+```
+
+Then print:
+
+```python
+print(
+    f"[{timestamp}] "
+    f"Collected {len(observations)} observations, "
+    f"derived {len(relationships)} relationships"
+)
+```
+
+So your output should eventually look like:
+
+```text
+[15:20:10] Collected 77 observations, derived 76 relationships
+[15:20:21] Collected 77 observations, derived 76 relationships
+[15:20:32] Collected 78 observations, derived 77 relationships
+```
+
+Why approximately 76 relationships for 77 observations?
+
+Because:
+
+```text
+1 host observation
++
+76 process observations
+=
+77 observations
+```
+
+and each process generally has one `parent_pid`.
+
+So:
+
+```text
+76 process observations
+        ↓
+~76 parent relationships
+```
+
+There can be exceptions, so don't treat the numbers as a strict invariant.
+
+---
+
+# 🧠 One subtle architectural point
+
+We're currently deriving relationships **from observations**, not asking SQLite to derive them.
+
+That's intentional.
+
+The architecture is:
+
+```text
+Collector
+   ↓
+Observation
+   ↓
+Relationship extraction
+   ↓
+Relationship
+```
+
+not:
+
+```text
+Collector
+   ↓
+SQLite
+   ↓
+SQL magic
+   ↓
+Relationship
+```
+
+Why?
+
+Because eventually relationships can involve much more than a simple database query.
+
+For example:
+
+```text
+Process
+   ↓
+listening port
+   ↓
+network connection
+   ↓
+application
+   ↓
+database
+```
+
+That is **Galaxy logic**, so we want a dedicated relationship layer.
+
+---
+
+# 🎯 7B vs 7C
+
+Make sure you understand the distinction.
+
+### 7B = Persistence
+
+We taught Galaxy:
+
+> **Remember relationships.**
+
+```text
+Relationship
+     ↓
+relationships table
+```
+
+### 7C = Integration
+
+We taught Galaxy:
+
+> **Automatically create and remember relationships during every collection cycle.**
+
+```text
+Collect
+  ↓
+Observe
+  ↓
+Derive relationships
+  ↓
+Save both
+```
+
+That's why both milestones matter.
+
+---
+
+# 🧪 Your testing order
+
+Don't change everything at once.
+
+Do this:
+
+### First
+
+Implement 7B:
+
+```text
+SQLiteStore
+   ↓
+relationships table
+```
+
+Run:
+
+```bash
+python -m tests.test_relationship_store
+```
+
+Confirm the relationship appears.
+
+### Then
+
+Implement 7C:
+
+```text
+Orchestrator
+   ↓
+relationships
+```
+
+Update `main.py`.
+
+Run:
+
+```bash
+python main.py
+```
+
+Let it run 2–3 cycles.
+
+You want something like:
+
+```text
+GALAXY
+======
+
+Collecting every 10 seconds. Press Ctrl+C to stop.
+
+[15:30:01] Collected 77 observations, derived 76 relationships
+[15:30:13] Collected 77 observations, derived 76 relationships
+[15:30:24] Collected 78 observations, derived 77 relationships
+```
+
+Then stop:
+
+```text
+Ctrl+C
+```
+
+---
+
+# 🌌 Where we are after 7C
+
+You will have reached a very important point:
+
+```text
+                    GALAXY
+                       │
+             ┌─────────┴──────────┐
+             ▼                    ▼
+        OBSERVATIONS         RELATIONSHIPS
+             │                    │
+             ▼                    ▼
+       "what happened?"      "what connects?"
+             │                    │
+             └─────────┬──────────┘
+                       ▼
+                    galaxy.db
+```
+
+That is the foundation for the next major phase:
+
+# **Milestone 8 — Build the System Graph**
+
+We'll start asking Galaxy to see:
+
+```text
+Host
+ │
+ └── runs
+      │
+      ▼
+   Process
+      │
+      └── parent_of
+             │
+             ▼
+          Process
+```
+
+And importantly, we **won't jump straight to networking or AI**. We'll first make this parent/child process graph queryable and visible, because this is our first real relationship model.
+
+So for now:
+
+**7B → test it → 7C → test it.**
+
+Once you get both working, tell me **`7B and 7C completed`**, and we'll move to the graph layer.
+Excellent. **7C is completed.** ✅
+
+Your result:
+
+```text
+381 relationships
+```
+
+and examples such as:
+
+```text
+pid:2    parent_of    pid:37062
+pid:37062 parent_of   pid:37063
+pid:37063 parent_of   pid:37064
+pid:1    parent_of    pid:45560
+pid:1539 parent_of    pid:47034
+```
+
+prove that Galaxy is now collecting **facts and connections**.
+
+# 🌌 Next: Milestone 8 — Build the System Graph
+
+This is the natural next step.
+
+So far Galaxy stores:
+
+```text
+OBSERVATIONS
+────────────────────────────
+process  pid:47034
+parent_pid = 1539
+CPU = ...
+memory = ...
+```
+
+and separately:
+
+```text
+RELATIONSHIPS
+────────────────────────────
+pid:1539 → parent_of → pid:47034
+```
+
+But we don't yet have a way to **ask Galaxy about the graph**.
+
+For example:
+
+> Who is the parent of PID 47034?
+
+or:
+
+> What children does PID 1539 have?
+
+or:
+
+> Show me the process tree.
+
+That's what **Milestone 8** will introduce.
+
+---
+
+# 8A — Graph Queries
+
+We're going to start very small.
+
+Add two queries:
+
+```text
+get_parent(child)
+get_children(parent)
+```
+
+Conceptually:
+
+```text
+             pid:1539
+             /      \
+            /        \
+           ▼          ▼
+       pid:37062   pid:47034
+          │
+          ▼
+       pid:37063
+          │
+          ▼
+       pid:37064
+```
+
+Galaxy should be able to navigate this structure.
+
+---
+
+# Why start with queries?
+
+Because we don't need a graph database yet.
+
+**SQLite is perfectly capable of storing this graph.**
+
+We already have:
+
+```text
+relationships
+```
+
+so we don't need to introduce another technology prematurely.
+
+The core idea is:
+
+```text
+Database
+   ↓
+relationships
+   ↓
+Graph queries
+   ↓
+Process tree
+```
+
+---
+
+# 8A Step 1 — Add `get_children()`
+
+Open:
+
+```text
+core/storage/sqlite_store.py
+```
+
+Add:
+
+```python
+def get_children(self, parent_entity_id):
+    cursor = self.conn.execute(
+        """
+        SELECT
+            source_entity_type,
+            source_entity_id,
+            relationship_type,
+            target_entity_type,
+            target_entity_id,
+            timestamp
+        FROM relationships
+        WHERE relationship_type = ?
+          AND source_entity_id = ?
+        ORDER BY id ASC
+        """,
+        ("parent_of", parent_entity_id),
+    )
+
+    return cursor.fetchall()
+```
+
+Now Galaxy can ask:
+
+```python
+store.get_children("pid:1539")
+```
+
+and SQLite finds:
+
+```text
+source = pid:1539
+relationship = parent_of
+```
+
+So if the database contains:
+
+```text
+pid:1539 → parent_of → pid:47034
+pid:1539 → parent_of → pid:48000
+pid:1539 → parent_of → pid:49000
+```
+
+the query returns those children.
+
+---
+
+# 8A Step 2 — Add `get_parent()`
+
+Add:
+
+```python
+def get_parent(self, child_entity_id):
+    cursor = self.conn.execute(
+        """
+        SELECT
+            source_entity_type,
+            source_entity_id,
+            relationship_type,
+            target_entity_type,
+            target_entity_id,
+            timestamp
+        FROM relationships
+        WHERE relationship_type = ?
+          AND target_entity_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        ("parent_of", child_entity_id),
+    )
+
+    return cursor.fetchone()
+```
+
+Now:
+
+```python
+store.get_parent("pid:47034")
+```
+
+can return:
+
+```text
+pid:1539 → parent_of → pid:47034
+```
+
+---
+
+# 🧠 Why these two queries?
+
+Because they represent the two directions of the relationship.
+
+### Parent → children
+
+```text
+pid:1539
+   │
+   ├──→ pid:37062
+   ├──→ pid:47034
+   └──→ pid:48000
+```
+
+```python
+get_children("pid:1539")
+```
+
+### Child → parent
+
+```text
+pid:1539
+   │
+   ▼
+pid:47034
+```
+
+```python
+get_parent("pid:47034")
+```
+
+This is the beginning of **graph traversal**.
+
+---
+
+# 8B — Build a Process Tree
+
+Once 8A works, we'll create something like:
+
+```text
+core/graph/process_tree.py
+```
+
+Its responsibility will be:
+
+> Turn individual parent/child relationships into a process tree.
+
+For example:
+
+```text
+systemd [1]
+│
+├── sshd [1539]
+│   └── python [47034]
+│
+├── docker [2000]
+│   ├── containerd [2100]
+│   └── ...
+│
+└── ...
+```
+
+Notice something important:
+
+The collector **doesn't build this tree**.
+
+The collector only says:
+
+```text
+PID 47034
+parent_pid 1539
+```
+
+The graph layer interprets it.
+
+That's good separation of responsibility:
+
+```text
+Collector
+    ↓
+"What exists?"
+
+Relationship layer
+    ↓
+"What's connected?"
+
+Graph layer
+    ↓
+"How are these connections organized?"
+```
+
+---
+
+# 8C — Make Galaxy print the tree
+
+Finally we'll make:
+
+```bash
+python main.py
+```
+
+or a dedicated test produce something understandable:
+
+```text
+🌌 GALAXY PROCESS TREE
+
+systemd [1]
+├── sshd [1539]
+│   └── python [47034]
+│       └── ...
+├── docker [2000]
+│   └── ...
+└── ...
+```
+
+This will be our **first human-readable view of Galaxy's internal graph**.
+
+---
+
+# 🌌 Milestone 8 roadmap
+
+We're going to do it in three small stages:
+
+### **8A — Query the graph** ← NEXT
+
+```text
+SQLite
+  ↓
+get_parent()
+get_children()
+```
+
+### **8B — Build the process tree**
+
+```text
+relationships
+      ↓
+graph traversal
+      ↓
+process tree
+```
+
+### **8C — Display the tree**
+
+```text
+process tree
+      ↓
+human-readable output
+```
+
+---
+
+# Where Galaxy stands now
+
+You've come quite a long way:
+
+```text
+M1 ✅ Basic system information
+        ↓
+M2 ✅ Project structure / models
+        ↓
+M3 ✅ Observation collection
+        ↓
+M4A ✅ System collector
+        ↓
+M4B ✅ Process collector
+        ↓
+M5 ✅ Orchestrator / pipeline
+        ↓
+M6 ✅ Query layer
+        ↓
+M7A ✅ Relationship model
+        ↓
+M7B ✅ Relationship storage
+        ↓
+M7C ✅ Automatic relationship extraction
+        ↓
+M8A ← YOU ARE HERE
+        ↓
+M8B Process graph
+        ↓
+M8C Process tree
+```
+
+And the architectural progression is:
+
+```text
+GALAXY
+  │
+  ├── collects FACTS
+  │
+  ├── stores FACTS
+  │
+  ├── derives RELATIONSHIPS
+  │
+  ├── stores RELATIONSHIPS
+  │
+  └── traverses RELATIONSHIPS   ← next
+```
+
+**Do 8A only now.** Add `get_children()` and `get_parent()`, then we'll test them against your real `galaxy.db`. After that, we'll move to 8B and build the actual process tree.
+Absolutely. Since **8A is now completed** (`get_children()` and `get_parent()` added), let's step back and give you the **complete Galaxy roadmap**, what each milestone means, why we're doing it, and the **updated code architecture**.
+
+The important thing is: **don't implement all of this at once.** The roadmap is the destination; we'll continue one small milestone at a time.
+
+# 🌌 GALAXY — Complete Project Roadmap
+
+The core idea of Galaxy is:
+
+> **Collect information about a Linux system, turn it into structured observations, preserve history, discover relationships between entities, and eventually build a useful system graph.**
+
+The architecture evolves like this:
+
+```text
+                 🌌 GALAXY
+                     │
+                     ▼
+                COLLECTION
+                     │
+          ┌──────────┴──────────┐
+          ▼                     ▼
+       System                Process
+      Collector              Collector
+          │                     │
+          └──────────┬──────────┘
+                     ▼
+                OBSERVATIONS
+                     │
+                     ▼
+                  STORAGE
+                     │
+                     ▼
+              RELATIONSHIPS
+                     │
+                     ▼
+                GRAPH QUERY
+                     │
+                     ▼
+               PROCESS TREE
+                     │
+                     ▼
+             NETWORK / SERVICES
+                     │
+                     ▼
+                 CORRELATION
+                     │
+                     ▼
+                 INSIGHTS
+```
+
+---
+
+# 🗺️ All Milestones
+
+## Phase 1 — Foundation
+
+### Milestone 1 — Project skeleton ✅
+
+We created the basic Galaxy project.
+
+Purpose:
+
+> Give the project a clean structure before adding functionality.
+
+---
+
+### Milestone 2 — Observation model ✅
+
+We introduced:
+
+```python
+@dataclass
+class Observation:
+    source: str
+    entity_type: str
+    entity_id: str
+    timestamp: datetime
+    data: dict
+```
+
+This is one of the most important decisions in Galaxy.
+
+An observation means:
+
+> **Something observed about something at a particular time.**
+
+For example:
+
+```text
+process
+pid:39038
+2026-09-08 13:44
+```
+
+with:
+
+```python
+{
+    "cpu_percent": 3.9,
+    "memory_percent": 0.21
+}
+```
+
+---
+
+# Phase 2 — Collection
+
+## Milestone 3 — Collector interface ✅
+
+We created:
+
+```python
+class Collector(ABC):
+
+    @abstractmethod
+    def collect(self) -> list[Observation]:
+        raise NotImplementedError
+```
+
+This establishes a contract:
+
+```text
+Every collector
+      ↓
+collect()
+      ↓
+list[Observation]
+```
+
+This allows Galaxy to add collectors later without changing the whole application.
+
+---
+
+## Milestone 4A — System collector ✅
+
+Galaxy learned about the host:
+
+```text
+CPU
+Memory
+Disk
+OS
+OS version
+Hostname
+Uptime
+```
+
+Example:
+
+```python
+{
+    "cpu": 1.5,
+    "memory": 30.3,
+    "disk": 3.8,
+    "os": "Linux",
+    ...
+}
+```
+
+The entity is:
+
+```text
+host:localhost
+```
+
+---
+
+## Milestone 4B — Process collector ✅
+
+This was a major step.
+
+Galaxy went from:
+
+```text
+1 host observation
+```
+
+to:
+
+```text
+1 host
++
+many processes
+```
+
+And now each process contains:
+
+```text
+PID
+name
+CPU
+memory
+status
+username
+parent PID
+executable
+command line
+```
+
+For example:
+
+```python
+{
+    "pid": 39038,
+    "name": "python",
+    "cpu_percent": 3.9,
+    "memory_percent": 0.21,
+    "status": "running",
+    "username": "marsh",
+    "parent_pid": 1539,
+    "executable": "/usr/bin/python3.12",
+    "command_line": ["python", "main.py"]
+}
+```
+
+This is what gave us the information needed for relationships.
+
+---
+
+# Phase 3 — Persistence
+
+## Milestone 5 — Orchestrator ✅
+
+We introduced:
+
+```text
+main.py
+    ↓
+Orchestrator
+    ↓
+Collectors
+    ↓
+Observations
+    ↓
+SQLiteStore
+    ↓
+galaxy.db
+```
+
+The Orchestrator's job is:
+
+> Coordinate the work.
+
+It should **not** know how CPU is measured or how SQLite works.
+
+That separation is important.
+
+---
+
+# Phase 4 — Querying
+
+## Milestone 6 — Query layer ✅
+
+Galaxy learned how to retrieve information.
+
+We added things such as:
+
+```python
+count()
+latest()
+find_by_entity()
+```
+
+The important conceptual change was:
+
+```text
+Before:
+
+COLLECT → STORE
+
+
+After:
+
+COLLECT → STORE
+              ↑
+              │
+            QUERY
+```
+
+Now Galaxy doesn't just collect information.
+
+It can retrieve its own history.
+
+---
+
+# Phase 5 — Relationships
+
+## Milestone 7A — Relationship model ✅
+
+We created:
+
+```python
+@dataclass
+class Relationship:
+    source_entity_type: str
+    source_entity_id: str
+
+    relationship_type: str
+
+    target_entity_type: str
+    target_entity_id: str
+
+    timestamp: datetime
+```
+
+This gives us the generic structure:
+
+```text
+SOURCE
+   │
+   │ relationship
+   ▼
+TARGET
+```
+
+For processes:
+
+```text
+pid:1539
+   │
+   │ parent_of
+   ▼
+pid:39038
+```
+
+---
+
+## Milestone 7B — Relationship storage ✅
+
+We created:
+
+```text
+relationships
+```
+
+inside:
+
+```text
+galaxy.db
+```
+
+So now:
+
+```text
+galaxy.db
+│
+├── observations
+│
+└── relationships
+```
+
+The database stores both:
+
+```text
+facts
+```
+
+and:
+
+```text
+connections
+```
+
+---
+
+## Milestone 7C — Automatic relationship extraction ✅
+
+The Orchestrator now does:
+
+```text
+collect
+   ↓
+observations
+   ↓
+derive relationships
+   ↓
+save observations
+   ↓
+save relationships
+```
+
+Your real database proved this works:
+
+```text
+381 relationships
+```
+
+with examples like:
+
+```text
+pid:2
+   │
+   │ parent_of
+   ▼
+pid:37062
+```
+
+Excellent.
+
+---
+
+# Phase 6 — Graph
+
+You're now here.
+
+## Milestone 8A — Graph queries ✅
+
+You've added:
+
+```python
+get_parent()
+get_children()
+```
+
+Now Galaxy can navigate:
+
+```text
+Parent
+  │
+  ├── Child
+  ├── Child
+  └── Child
+```
+
+and:
+
+```text
+Child
+  │
+  ▼
+Parent
+```
+
+This is the first real graph capability.
+
+---
+
+# 🚀 Next: Milestone 8B — Process Tree
+
+This is your **immediate next implementation**.
+
+We currently have individual relationships:
+
+```text
+1 → parent_of → 1539
+1539 → parent_of → 39038
+1539 → parent_of → 39041
+39038 → parent_of → 39042
+```
+
+We want to turn them into:
+
+```text
+PID 1
+└── PID 1539
+    ├── PID 39038
+    │   └── PID 39042
+    │
+    └── PID 39041
+```
+
+This is called **graph traversal**.
+
+---
+
+# 8B — Core idea
+
+The key question is:
+
+> Starting from a process, how do I find everything underneath it?
+
+We already have:
+
+```python
+get_children()
+```
+
+So we can recursively follow children.
+
+Conceptually:
+
+```text
+get_children(1)
+       │
+       ▼
+    [1539]
+       │
+       ▼
+get_children(1539)
+       │
+       ├── 39038
+       └── 39041
+              │
+              ▼
+       get_children(39041)
+```
+
+This is why we built `get_children()` in 8A.
+
+---
+
+# 8B — New file
+
+Create:
+
+```text
+core/graph/process_tree.py
+```
+
+Start with:
+
+```python
+from core.storage.sqlite_store import SQLiteStore
+
+
+class ProcessTree:
+
+    def __init__(self, store: SQLiteStore):
+        self.store = store
+
+    def get_tree(self, root_pid):
+        root_entity_id = f"pid:{root_pid}"
+
+        return self._build_tree(root_entity_id)
+
+    def _build_tree(self, entity_id):
+
+        children = self.store.get_children(entity_id)
+
+        tree = {
+            "entity_id": entity_id,
+            "children": []
+        }
+
+        for child in children:
+
+            child_entity_id = child[4]
+
+            child_tree = self._build_tree(
+                child_entity_id
+            )
+
+            tree["children"].append(child_tree)
+
+        return tree
+```
+
+Don't worry about making this pretty yet.
+
+The important thing is understanding what it's doing.
+
+---
+
+# The recursive idea
+
+Suppose:
+
+```text
+1
+└── 1539
+    ├── 39038
+    └── 39041
+```
+
+We call:
+
+```python
+tree.get_tree(1)
+```
+
+Galaxy does:
+
+```text
+_build_tree(pid:1)
+```
+
+Finds:
+
+```text
+pid:1539
+```
+
+Then calls:
+
+```text
+_build_tree(pid:1539)
+```
+
+That finds:
+
+```text
+pid:39038
+pid:39041
+```
+
+Then:
+
+```text
+_build_tree(pid:39038)
+```
+
+and:
+
+```text
+_build_tree(pid:39041)
+```
+
+Eventually processes with no children return:
+
+```python
+{
+    "entity_id": "pid:39038",
+    "children": []
+}
+```
+
+So the complete structure becomes nested.
+
+---
+
+# 8C — Print the tree
+
+Once 8B works, we'll add a display function.
+
+The output should eventually look something like:
+
+```text
+🌌 GALAXY PROCESS TREE
+
+pid:1
+├── pid:1539
+│   ├── pid:39038
+│   │   └── pid:39042
+│   └── pid:39041
+│
+├── pid:2000
+│   └── pid:2050
+│
+└── pid:3000
+```
+
+Then we'll improve it to show process names:
+
+```text
+systemd [1]
+├── sshd [1539]
+│   ├── python [39038]
+│   │   └── python [39042]
+│   └── bash [39041]
+└── docker [2000]
+```
+
+That second version will require combining:
+
+```text
+relationships
++
+process observations
+```
+
+That's a very useful exercise because it demonstrates **correlation**.
+
+---
+
+# Phase 7 — Process Intelligence
+
+After the process tree works, we'll make process information richer.
+
+## Milestone 9 — Process identity
+
+We'll separate:
+
+```text
+PID
+```
+
+from:
+
+```text
+process identity
+```
+
+because PIDs can be reused.
+
+For example:
+
+```text
+PID 5000
+```
+
+could represent one process now and another process later.
+
+We'll start thinking about:
+
+```text
+PID
+create time
+executable
+```
+
+as a stronger identity.
+
+---
+
+# Milestone 10 — Process lifecycle
+
+Galaxy will detect:
+
+```text
+PROCESS_STARTED
+PROCESS_RUNNING
+PROCESS_EXITED
+```
+
+For example:
+
+```text
+10:00
+python PID 5000 appears
+
+10:10
+python PID 5000 exists
+
+10:20
+python PID 5000 disappears
+```
+
+Galaxy can infer:
+
+```text
+PID 5000
+started ≈ 10:00
+stopped ≈ 10:20
+```
+
+Now Galaxy is understanding **events**, not just snapshots.
+
+---
+
+# Phase 8 — Network
+
+## Milestone 11 — Network observations
+
+We'll collect things such as:
+
+```text
+listening ports
+local addresses
+remote connections
+protocol
+PID association where available
+```
+
+Then relationships can become:
+
+```text
+Process
+   │
+   │ listens_on
+   ▼
+Port
+```
+
+and:
+
+```text
+Process
+   │
+   │ connects_to
+   ▼
+Endpoint
+```
+
+---
+
+# Phase 9 — Services
+
+## Milestone 12 — Service discovery
+
+Galaxy can discover services such as:
+
+```text
+systemd services
+Docker containers
+other service managers
+```
+
+Then:
+
+```text
+Host
+ │
+ └── runs
+      │
+      ▼
+   Service
+      │
+      └── owns/runs
+            │
+            ▼
+         Process
+```
+
+Now the graph becomes more meaningful.
+
+---
+
+# Phase 10 — Applications
+
+## Milestone 13 — Application identity
+
+A process isn't necessarily an application.
+
+For example:
+
+```text
+python
+```
+
+could represent:
+
+```text
+Galaxy
+Django
+Flask
+Celery
+some script
+```
+
+We'll eventually use:
+
+```text
+executable
+command line
+working directory
+environment clues
+open files
+ports
+```
+
+to identify applications.
+
+Then:
+
+```text
+Application
+      │
+      ├── runs_as → Process
+      ├── uses → Database
+      └── listens_on → Port
+```
+
+---
+
+# Phase 11 — Logs
+
+## Milestone 14 — Log collection
+
+Galaxy will start observing logs.
+
+Conceptually:
+
+```text
+Log event
+   │
+   ├── timestamp
+   ├── severity
+   ├── message
+   └── source
+```
+
+Then connect logs to entities.
+
+For example:
+
+```text
+Process
+   │
+   │ generated
+   ▼
+Log event
+```
+
+---
+
+# Phase 12 — Correlation
+
+## Milestone 15 — Correlation engine
+
+This is where the previous milestones start paying off.
+
+Imagine:
+
+```text
+14:00:00
+Process starts
+
+14:00:03
+CPU → 95%
+
+14:00:04
+Network connection appears
+
+14:00:05
+Error appears in logs
+```
+
+Galaxy can eventually connect:
+
+```text
+Process
+  │
+  ├── started
+  ├── CPU spike
+  ├── network connection
+  └── error log
+```
+
+Instead of showing four unrelated facts, Galaxy can say:
+
+> These events are associated with the same process during the same period.
+
+That's the long-term purpose of the architecture.
+
+---
+
+# Phase 13 — Insights
+
+## Milestone 16 — Detection / analysis
+
+Eventually Galaxy can detect things such as:
+
+```text
+High CPU process
+```
+
+or:
+
+```text
+Process spawned many children
+```
+
+or:
+
+```text
+Process opened a network connection shortly after starting
+```
+
+or:
+
+```text
+Service restarted repeatedly
+```
+
+The important point is that these aren't the first milestones.
+
+We build the evidence infrastructure first.
+
+---
+
+# Phase 14 — User Interface
+
+## Milestone 17 — Galaxy UI
+
+Only after the backend is useful do we build a proper interface.
+
+Potentially:
+
+```text
+┌──────────────────────────────────────┐
+│              GALAXY                  │
+├──────────────────────────────────────┤
+│ CPU       Memory       Processes     │
+│ 30%       42%          82            │
+├──────────────────────────────────────┤
+│                                      │
+│ Process Graph                        │
+│                                      │
+│ systemd [1]                          │
+│ ├── sshd [1539]                      │
+│ │   └── python [39038]               │
+│                                      │
+└──────────────────────────────────────┘
+```
+
+But we'll worry about that later.
+
+---
+
+# 🌌 The final architecture we're aiming toward
+
+Eventually Galaxy should look conceptually like this:
+
+```text
+                         🌌 GALAXY
+                              │
+                    ┌─────────┴─────────┐
+                    │                   │
+               COLLECTORS           ANALYZERS
+                    │                   │
+          ┌─────────┼────────┐          │
+          ▼         ▼        ▼          │
+       System    Process   Network      │
+          │         │        │          │
+          └─────────┼────────┘          │
+                    ▼                   │
+              OBSERVATIONS              │
+                    │                   │
+                    ▼                   │
+                 STORAGE                │
+                    │                   │
+                    ▼                   │
+             RELATIONSHIPS              │
+                    │                   │
+                    ▼                   │
+               GRAPH LAYER              │
+                    │                   │
+          ┌─────────┼─────────┐         │
+          ▼         ▼         ▼         │
+       Process    Network   Services     │
+         Tree       Graph      Graph     │
+          │         │         │          │
+          └─────────┼─────────┘          │
+                    ▼                   │
+               CORRELATION ◄────────────┘
+                    │
+                    ▼
+                 INSIGHTS
+                    │
+                    ▼
+                    UI
+```
+
+---
+
+# 🧠 The most important mental model
+
+I want you to keep these four concepts separate as we continue:
+
+### 1. Collector
+
+**"What can I observe?"**
+
+```text
+psutil → CPU/process/network information
+```
+
+### 2. Observation
+
+**"What did I observe?"**
+
+```text
+PID 39038
+CPU 3.9%
+parent 1539
+timestamp ...
+```
+
+### 3. Relationship
+
+**"What is connected to what?"**
+
+```text
+1539 → parent_of → 39038
+```
+
+### 4. Graph
+
+**"What does the whole connected structure look like?"**
+
+```text
+1539
+├── 39038
+│   └── 39042
+└── 39041
+```
+
+This separation is the architectural foundation we're building.
+
+---
+
+# 📍 Your exact position now
+
+```text
+M1   Foundation                    ✅
+M2   Observation model             ✅
+M3   Collector interface           ✅
+M4A  System collector              ✅
+M4B  Process collector             ✅
+M5   Orchestrator                  ✅
+M6   Query layer                   ✅
+M7A  Relationship model            ✅
+M7B  Relationship storage         ✅
+M7C  Relationship extraction      ✅
+M8A  Graph queries                 ✅ ← just completed
+
+M8B  Process tree                  ← NEXT
+M8C  Tree display                  ← after 8B
+
+M9   Process identity
+M10  Process lifecycle
+M11  Network
+M12  Services
+M13  Applications
+M14  Logs
+M15  Correlation
+M16  Analysis / detection
+M17  UI
+```
+
+## 🎯 So your next implementation is **8B only**
+
+You already built the two fundamental graph operations:
+
+```python
+get_parent()
+get_children()
+```
+
+Now we use them to build the first actual graph structure:
+
+```text
+                    PID 1
+                     │
+             ┌───────┴───────┐
+             ▼               ▼
+          PID 1539        PID 2000
+          /     \
+         ▼       ▼
+      PID 39038 PID 39041
+         │
+         ▼
+      PID 39042
+```
+
+**Don't add network, services, or UI yet.** The process tree is the bridge between "I have relationships in SQLite" and "Galaxy actually understands a graph."
+
+Next, implement **8B**, test the recursive tree against your real `galaxy.db`, and then we'll do **8C** to make that graph human-readable.
+
+

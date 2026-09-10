@@ -1,0 +1,2910 @@
+                    GALAXY
+                       │
+                       ▼
+                 Orchestrator
+                       │
+          ┌────────────┴────────────┐
+          ▼                         ▼
+   SystemCollector          ProcessCollector
+          │                         │
+          ▼                         ▼
+    Host Observation       Process Observations
+                                    │
+                                    │ parent_pid
+                                    ▼
+                         process_relationships()
+                                    │
+                                    ▼
+                              Relationships
+                                    │
+                   ┌────────────────┴─────────────┐
+                   ▼                              ▼
+             observations                  relationships
+                   │                              │
+                   └──────────────┬───────────────┘
+                                  ▼
+                              galaxy.db
+
+
+
+                        Yes — **this output is actually a good sign for Milestone 8B.** Your traversal is working.
+
+ The important thing is to separate **“the graph traversal works”** from **“the graph data is clean.”**
+
+ ## What your output proves
+
+ You asked for:
+
+```
+tree.get_tree(1539)
+```
+
+ and Galaxy started at:
+
+```
+pid:1539
+```
+
+ Then it followed `parent_of` relationships recursively:
+
+```
+pid:1539
+├── pid:39038
+├── pid:47034
+├── pid:47034
+├── pid:47034
+├── ...
+└── pid:1540
+    └── pid:3249
+        ├── pid:3259
+        │   └── pid:3261
+        │       ├── pid:3269
+        │       ├── pid:3270
+        │       ├── pid:3271
+        │       ├── pid:3272
+        │       ├── pid:3293
+        │       │   └── pid:3295
+        │       └── pid:3294
+        └── ...
+```
+
+ That means this part is functioning:
+
+```
+relationships
+      ↓
+get_children()
+      ↓
+_build_tree()
+      ↓
+recursive traversal
+      ↓
+nested tree
+```
+
+ So **Milestone 8B's core objective has been achieved.**
+
+ ## Why are you getting duplicates?
+
+ This:
+
+```
+pid:47034
+pid:47034
+pid:47034
+pid:47034
+pid:47034
+```
+
+ strongly suggests your `relationships` table contains multiple historical `parent_of` records for the same relationship.
+
+ For example:
+
+```
+1539 → parent_of → 47034
+1539 → parent_of → 47034
+1539 → parent_of → 47034
+1539 → parent_of → 47034
+```
+
+ Your current query deliberately returns all of them:
+
+```
+SELECT ...
+FROM relationships
+WHERE relationship_type = ?
+  AND source_entity_id = ?
+ORDER BY id ASC
+```
+
+ And your tree builder faithfully traverses **every row**.
+
+ So the tree isn't malfunctioning. It's saying:
+
+ > "You told me there are five relationship records connecting 1539 to 47034, so I'm going to traverse all five."
+
+ ## And this is exactly what your milestone says
+
+ You quoted the important architectural note:
+
+ > Your database contains historical observations and historical relationships.
+
+ That's why **we should not fix this yet**.
+
+ For 8B, we're asking one simple question:
+
+ > **Can Galaxy navigate the relationship graph?**
+
+ Your answer is now:
+
+ **Yes.**
+
+ The historical duplication/time-awareness problem belongs to a later milestone.
+
+ ## Don't change `ProcessTree` yet
+
+ I would leave this:
+
+```
+def _build_tree(self, entity_id):
+
+    children = self.store.get_children(entity_id)
+
+    tree = {
+        "entity_id": entity_id,
+        "children": []
+    }
+
+    for child in children:
+
+        child_entity_id = child[4]
+
+        child_tree = self._build_tree(
+            child_entity_id
+        )
+
+        tree["children"].append(child_tree)
+
+    return tree
+```
+
+ exactly as it is for now.
+
+ In fact, **don't add `DISTINCT` yet**, don't filter by timestamp, don't check whether the process still exists, and don't try to deduplicate.
+
+ Those would be solving the **next architectural problem**, not 8B.
+
+ ## One thing I would do now
+
+ Your test output is getting huge, so make the test easier to visually inspect.
+
+ For example:
+
+```
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.process_tree import ProcessTree
+import json
+
+store = SQLiteStore()
+tree = ProcessTree(store)
+
+result = tree.get_tree(1539)
+
+print(json.dumps(result, indent=2))
+```
+
+ Or, even better for this milestone, create a small tree printer:
+
+```
+def print_tree(node, prefix=""):
+    print(prefix + node["entity_id"])
+
+    for child in node["children"]:
+        print_tree(child, prefix + "  ")
+```
+
+ Then:
+
+```
+result = tree.get_tree(1539)
+print_tree(result)
+```
+
+ would give you something much closer to the milestone's intended visualization:
+
+```
+pid:1539
+  pid:39038
+  pid:47034
+  pid:47034
+  pid:47034
+  pid:1540
+    pid:3249
+      pid:3259
+        pid:3261
+          pid:3269
+          pid:3270
+          pid:3271
+          pid:3272
+          pid:3293
+            pid:3295
+          pid:3294
+```
+
+ ### Bottom line
+
+ **8B is working.** ✅
+
+ The duplicates are telling us something interesting about the current historical database, but **we intentionally leave that problem alone for now**.
+
+ Think of the milestones as:
+
+```
+8B
+Can we traverse the graph?
+        ↓
+       YES ✅
+
+Later
+Can we make traversal time-aware?
+        ↓
+Can we eliminate historical duplicates?
+        ↓
+Can we represent the process tree as it existed at time T?
+```
+
+ So I would **move on from 8B rather than "fixing" the duplicates now**.
+
+
+
+ Yes. They are doing **the same basic job**, but your `ProcessTreeDisplay` version is more sophisticated because it creates the tree branches (`├──`, `└──`, `│`).
+
+ Let's break down the simpler version first.
+
+ ## The simple version
+
+```
+def print_tree(node, prefix=""):
+    print(prefix + node["entity_id"])
+
+    for child in node["children"]:
+        print_tree(child, prefix + "  ")
+```
+
+ Suppose your tree is:
+
+```
+tree = {
+    "entity_id": "pid:1539",
+    "children": [
+        {
+            "entity_id": "pid:39038",
+            "children": [
+                {
+                    "entity_id": "pid:39042",
+                    "children": []
+                }
+            ]
+        },
+        {
+            "entity_id": "pid:39041",
+            "children": []
+        }
+    ]
+}
+```
+
+ When you call:
+
+```
+print_tree(tree)
+```
+
+ it does this:
+
+ ### 1\. Print the current node
+
+```
+print(prefix + node["entity_id"])
+```
+
+ Initially:
+
+```
+prefix = ""
+```
+
+ so:
+
+```
+pid:1539
+```
+
+ gets printed.
+
+---
+
+ ### 2\. Look at its children
+
+```
+for child in node["children"]:
+```
+
+ The children are:
+
+```
+pid:39038
+pid:39041
+```
+
+ For each child, it calls **the same function again**:
+
+```
+print_tree(child, prefix + "  ")
+```
+
+ This is called **recursion**.
+
+ The important idea is:
+
+ > "Print this node, then use the exact same instructions to print each child."
+
+---
+
+ ### 3\. First child
+
+ For:
+
+```
+pid:39038
+```
+
+ the function receives:
+
+```
+prefix = "  "
+```
+
+ So:
+
+```
+print(prefix + node["entity_id"])
+```
+
+ becomes:
+
+```
+  pid:39038
+```
+
+ Then it sees that `pid:39038` has a child:
+
+```
+pid:39042
+```
+
+ So it calls:
+
+```
+print_tree(child, prefix + "  ")
+```
+
+ Now the prefix becomes:
+
+```
+"    "
+```
+
+ and prints:
+
+```
+    pid:39042
+```
+
+---
+
+ ### 4\. Second child
+
+ Then it returns to:
+
+```
+pid:1539
+```
+
+ and processes:
+
+```
+pid:39041
+```
+
+ Its prefix is again:
+
+```
+"  "
+```
+
+ so you get:
+
+```
+  pid:39041
+```
+
+ Final result:
+
+```
+pid:1539
+  pid:39038
+    pid:39042
+  pid:39041
+```
+
+ So the `prefix` is simply controlling **how far the child is indented**.
+
+---
+
+ # Your `ProcessTreeDisplay` version
+
+ Your version:
+
+```
+class ProcessTreeDisplay:
+
+    def print_tree(self, tree):
+        self._print_node(tree, "", True)
+
+    def _print_node(self, node, prefix, is_last):
+
+        connector = "└── " if is_last else "├── "
+
+        print(prefix + connector + node["entity_id"])
+
+        children = node["children"]
+
+        for index, child in enumerate(children):
+
+            last = index == len(children) - 1
+
+            if is_last:
+                child_prefix = prefix + "    "
+            else:
+                child_prefix = prefix + "│   "
+
+            self._print_node(
+                child,
+                child_prefix,
+                last
+            )
+```
+
+ does the same recursive traversal, **but it keeps additional information**:
+
+```
+is_last
+```
+
+ That lets it know whether to draw:
+
+```
+├──
+```
+
+ or:
+
+```
+└──
+```
+
+ For example:
+
+```
+pid:1539
+├── pid:39038
+│   └── pid:39042
+└── pid:39041
+```
+
+ That's much nicer.
+
+ ## What this line does
+
+ This:
+
+```
+connector = "└── " if is_last else "├── "
+```
+
+ is basically:
+
+```
+if is_last:
+    connector = "└── "
+else:
+    connector = "├── "
+```
+
+ So if this is the **last child**, draw:
+
+```
+└──
+```
+
+ Otherwise draw:
+
+```
+├──
+```
+
+---
+
+ ## What `enumerate()` is doing
+
+ This:
+
+```
+for index, child in enumerate(children):
+```
+
+ gives you both:
+
+```
+index
+child
+```
+
+ For example, if there are three children:
+
+```
+index = 0 → first child
+index = 1 → second child
+index = 2 → third child
+```
+
+ Then:
+
+```
+last = index == len(children) - 1
+```
+
+ asks:
+
+ > "Is this the final child?"
+
+ For three children:
+
+```
+index 0 → 0 == 2 → False
+index 1 → 1 == 2 → False
+index 2 → 2 == 2 → True
+```
+
+ Therefore:
+
+```
+├── child 1
+├── child 2
+└── child 3
+```
+
+---
+
+ # So which one should you use?
+
+ **Use your `ProcessTreeDisplay` version.**
+
+ The simple version:
+
+```
+def print_tree(node, prefix=""):
+    ...
+```
+
+ was just a simplified explanation of **recursion**.
+
+ Your actual class is better suited to Milestone 8B because it produces the exact tree visualization they're asking for:
+
+```
+pid:1539
+├── pid:39038
+│   └── pid:39042
+└── pid:39041
+```
+
+ And importantly, **`ProcessTree` and `ProcessTreeDisplay` have different responsibilities**:
+
+```
+SQLiteStore
+     ↓
+relationships
+     ↓
+ProcessTree
+     ↓
+nested dictionary
+     ↓
+ProcessTreeDisplay
+     ↓
+pretty terminal tree
+```
+
+ That's a nice separation of concerns.
+
+ Your `ProcessTree` **builds the tree**.
+
+ Your `ProcessTreeDisplay` **displays the tree**.
+
+ So I'd keep both separate rather than putting the printing logic inside `ProcessTree`.
+
+
+
+ Exactly. ✅ **9B is completed**, and your output proves the stronger identity is being generated:
+
+```text
+pid:1@1788949760.18
+pid:2@1788949760.23
+pid:43@1788949760.78
+```
+
+You've also created **10A — Process Identity Map**.
+
+Now we'll move to the next piece:
+
+# 🌌 Milestone 10B — Identity-Aware Relationships
+
+This is an important architectural step because we need to connect the two things you have built:
+
+```text
+Process Identity
+        +
+Parent PID
+        ↓
+Parent Identity
+        ↓
+Relationship
+```
+
+Currently we have a problem.
+
+Your process observation might say:
+
+```text
+entity_id:
+pid:39038@1788949765.12
+
+parent_pid:
+1539
+```
+
+But the relationship needs the **full identity** of the parent:
+
+```text
+pid:1539@1788949761.55
+```
+
+We can't simply do:
+
+```text
+pid:1539
+```
+
+anymore.
+
+That's exactly why you created the identity map.
+
+---
+
+# 10B — Core idea
+
+Suppose one collection cycle gives us:
+
+```text
+PID    Identity
+──────────────────────────────
+1      pid:1@A
+1539   pid:1539@B
+39038  pid:39038@C
+39041  pid:39041@D
+```
+
+and process 39038 says:
+
+```text
+parent_pid = 1539
+```
+
+The identity map lets us do:
+
+```text
+1539
+ ↓
+pid:1539@B
+```
+
+Then Galaxy creates:
+
+```text
+pid:1539@B
+      │
+      │ parent_of
+      ▼
+pid:39038@C
+```
+
+That is much more reliable than:
+
+```text
+pid:1539 → pid:39038
+```
+
+---
+
+# Step 10B.1 — Modify the relationship builder
+
+Your current relationship code is probably something like:
+
+```text
+core/relationships/process.py
+```
+
+We want to change it so that it receives the **identity map**.
+
+Use:
+
+```python
+from core.models.relationship import Relationship
+
+
+def process_relationships(observation, identity_map):
+
+    relationships = []
+
+    data = observation.data
+
+    pid = data.get("pid")
+    parent_pid = data.get("parent_pid")
+
+    if pid is None or parent_pid is None:
+        return relationships
+
+    parent_identity = identity_map.get(parent_pid)
+
+    if parent_identity is None:
+        return relationships
+
+    relationships.append(
+        Relationship(
+            source_entity_type="process",
+            source_entity_id=parent_identity,
+
+            relationship_type="parent_of",
+
+            target_entity_type="process",
+            target_entity_id=observation.entity_id,
+
+            timestamp=observation.timestamp,
+        )
+    )
+
+    return relationships
+```
+
+---
+
+# 🧠 Let's understand every important part
+
+## 1. Receive the identity map
+
+Previously:
+
+```python
+def process_relationships(observation):
+```
+
+Now:
+
+```python
+def process_relationships(observation, identity_map):
+```
+
+Why?
+
+Because relationship creation needs to answer:
+
+> What is the parent's full identity?
+
+The identity map knows that.
+
+---
+
+## 2. Get the child PID
+
+```python
+pid = data.get("pid")
+```
+
+For example:
+
+```text
+39038
+```
+
+---
+
+## 3. Get the parent PID
+
+```python
+parent_pid = data.get("parent_pid")
+```
+
+For example:
+
+```text
+1539
+```
+
+---
+
+## 4. Find the parent's identity
+
+This is the important line:
+
+```python
+parent_identity = identity_map.get(parent_pid)
+```
+
+Suppose the map contains:
+
+```python
+{
+    1: "pid:1@1788949760.18",
+    1539: "pid:1539@1788949761.55",
+    39038: "pid:39038@1788949765.12"
+}
+```
+
+Then:
+
+```python
+identity_map.get(1539)
+```
+
+returns:
+
+```text
+pid:1539@1788949761.55
+```
+
+---
+
+# 5. Create the relationship
+
+Now:
+
+```python
+source_entity_id=parent_identity
+```
+
+becomes:
+
+```text
+pid:1539@1788949761.55
+```
+
+and:
+
+```python
+target_entity_id=observation.entity_id
+```
+
+is:
+
+```text
+pid:39038@1788949765.12
+```
+
+So Galaxy produces:
+
+```text
+pid:1539@1788949761.55
+          │
+          │ parent_of
+          ▼
+pid:39038@1788949765.12
+```
+
+🎯 That's the goal of 10B.
+
+---
+
+# Step 10B.2 — Update the Orchestrator
+
+Now the Orchestrator needs to create the identity map **before** creating relationships.
+
+Open:
+
+```text
+core/orchestrator.py
+```
+
+The important flow should become:
+
+```python
+from collectors.system import SystemCollector
+from collectors.process import ProcessCollector
+
+from core.storage.sqlite_store import SQLiteStore
+from core.relationships.process import process_relationships
+from core.graph.process_identity_map import ProcessIdentityMap
+
+
+class Orchestrator:
+
+    def __init__(self):
+
+        self.collectors = [
+            SystemCollector(),
+            ProcessCollector(),
+        ]
+
+        self.store = SQLiteStore()
+
+    def run_once(self):
+
+        all_observations = []
+
+        for collector in self.collectors:
+
+            observations = collector.collect()
+
+            all_observations.extend(observations)
+
+        # Build identity map from this collection cycle
+        process_observations = [
+            observation
+            for observation in all_observations
+            if observation.entity_type == "process"
+        ]
+
+        identity_map = ProcessIdentityMap(
+            process_observations
+        )
+
+        all_relationships = []
+
+        for observation in process_observations:
+
+            relationships = process_relationships(
+                observation,
+                identity_map
+            )
+
+            all_relationships.extend(
+                relationships
+            )
+
+        self.store.save(all_observations)
+
+        self.store.save_relationships(
+            all_relationships
+        )
+
+        return all_observations, all_relationships
+```
+
+---
+
+# 🧠 Notice the new pipeline
+
+Before:
+
+```text
+Collector
+   ↓
+Observation
+   ↓
+Relationship
+```
+
+Now:
+
+```text
+Collector
+   ↓
+Observations
+   ↓
+Identity Map
+   ↓
+Relationship Resolution
+   ↓
+Relationships
+   ↓
+Storage
+```
+
+This is much better.
+
+---
+
+# ⚠️ One important thing
+
+Your `SystemCollector` returns:
+
+```python
+list[Observation]
+```
+
+and `ProcessCollector` also returns:
+
+```python
+list[Observation]
+```
+
+So:
+
+```python
+all_observations.extend(observations)
+```
+
+is correct.
+
+Then we filter:
+
+```python
+process_observations = [
+    observation
+    for observation in all_observations
+    if observation.entity_type == "process"
+]
+```
+
+because only processes currently participate in our `parent_of` relationship.
+
+Later we'll have:
+
+```text
+network
+service
+container
+application
+```
+
+and those can have their own relationship logic.
+
+---
+
+# 10B.3 — Important: PID 1
+
+You noticed:
+
+```text
+pid:1
+parent_pid:0
+```
+
+That's normal for the root process.
+
+There usually isn't a process with:
+
+```text
+PID 0
+```
+
+in the same user-space process list that we want to treat as the parent.
+
+Therefore:
+
+```python
+parent_identity = identity_map.get(parent_pid)
+```
+
+returns:
+
+```text
+None
+```
+
+for PID 1.
+
+Then:
+
+```python
+if parent_identity is None:
+    return relationships
+```
+
+means:
+
+> Don't create a fake relationship to PID 0.
+
+So:
+
+```text
+pid:1
+```
+
+becomes the root.
+
+---
+
+# Step 10B.4 — Test it
+
+Create:
+
+```text
+tests/test_identity_relationship.py
+```
+
+Use:
+
+```python
+from collectors.process import ProcessCollector
+from core.graph.process_identity_map import ProcessIdentityMap
+from core.relationships.process import process_relationships
+
+
+collector = ProcessCollector()
+
+observations = collector.collect()
+
+identity_map = ProcessIdentityMap(
+    observations
+)
+
+relationships = []
+
+for observation in observations:
+
+    relationships.extend(
+        process_relationships(
+            observation,
+            identity_map
+        )
+    )
+
+print("Processes:", len(observations))
+print("Relationships:", len(relationships))
+
+print()
+
+for relationship in relationships[:10]:
+    print(relationship)
+```
+
+Run:
+
+```bash
+python -m tests.test_identity_relationship
+```
+
+You should see something similar to:
+
+```text
+Processes: 77
+Relationships: 76
+
+Relationship(
+    source_entity_type='process',
+    source_entity_id='pid:1@1788949760.18',
+    relationship_type='parent_of',
+    target_entity_type='process',
+    target_entity_id='pid:2@1788949760.23',
+    ...
+)
+```
+
+Notice the difference.
+
+Previously:
+
+```text
+pid:1
+   ↓
+pid:2
+```
+
+Now:
+
+```text
+pid:1@1788949760.18
+   ↓
+pid:2@1788949760.23
+```
+
+🎯 That's **10B**.
+
+---
+
+# 🌌 Then comes 10C — Process Lifecycle
+
+Once identity-aware relationships work, we'll move to lifecycle.
+
+The question becomes:
+
+> Was this process present in the previous collection cycle?
+
+For example:
+
+### Cycle 1
+
+```text
+PID 5000
+identity A
+```
+
+### Cycle 2
+
+```text
+PID 5000
+identity A
+```
+
+Galaxy knows:
+
+```text
+same process still running
+```
+
+But:
+
+### Cycle 3
+
+```text
+PID 5000
+missing
+```
+
+Galaxy can infer:
+
+```text
+PID 5000 exited
+```
+
+---
+
+# 10C architecture
+
+We'll introduce something like:
+
+```text
+ProcessLifecycleTracker
+```
+
+Conceptually:
+
+```python
+previous_processes
+        │
+        ▼
+current_processes
+        │
+        ▼
+      compare
+        │
+   ┌────┴─────┐
+   ▼          ▼
+started     exited
+```
+
+For example:
+
+```text
+Previous:
+A
+B
+C
+
+Current:
+A
+C
+D
+```
+
+Galaxy calculates:
+
+```text
+B → exited
+D → started
+A → still running
+C → still running
+```
+
+---
+
+# 🌌 After 10C
+
+The architecture becomes:
+
+```text
+                    Galaxy
+                       │
+                       ▼
+                  Collection
+                       │
+                       ▼
+                 Observations
+                       │
+             ┌─────────┴─────────┐
+             ▼                   ▼
+       Identity Map         Raw Facts
+             │
+             ▼
+       Relationships
+             │
+             ▼
+       Process Graph
+             │
+             ▼
+        Lifecycle
+        ┌────┼────┐
+        ▼    ▼    ▼
+     Started Running Exited
+```
+
+And **then** we move to the next major area:
+
+# 🌐 Milestone 11 — Network Intelligence
+
+We'll add:
+
+```text
+Network interfaces
+Listening ports
+TCP connections
+UDP connections
+```
+
+and eventually relationships such as:
+
+```text
+process
+   │
+   │ listens_on
+   ▼
+port
+```
+
+and:
+
+```text
+process
+   │
+   │ connects_to
+   ▼
+endpoint
+```
+
+That will make Galaxy much more interesting.
+
+---
+
+# 📍 Your exact roadmap now
+
+```text
+9A  create_time                    ✅
+9B  ProcessIdentity                ✅
+9C  use stronger identity          ✅
+
+10A ProcessIdentityMap             ✅
+10B Identity-aware relationships   ← YOU ARE HERE
+10C Process lifecycle
+
+11A Network interfaces
+11B Listening ports
+11C Network connections
+
+12A Service discovery
+12B Service → process
+12C Service relationships
+
+13A Application identification
+13B Application → process
+13C Application graph
+
+14A Log collection
+14B Log → entity
+14C Log correlation
+
+15A Time correlation
+15B Entity correlation
+15C Event correlation
+
+16A Detection rules
+16B Anomaly detection
+16C Insights
+
+17  API
+
+18  UI / visualization
+```
+
+### 🎯 For now: do only **10B**
+
+Implement the updated `process_relationships()` and update the Orchestrator so the flow is:
+
+```text
+ProcessCollector
+      ↓
+observations
+      ↓
+ProcessIdentityMap
+      ↓
+process_relationships()
+      ↓
+identity-aware relationships
+```
+
+Then run `tests/test_identity_relationship.py`.
+
+**Don't start 10C until we confirm that the relationships now contain both PID + `create_time` identities.**
+
+
+
+Yes. Your **10B is working correctly**. ✅
+
+You now have:
+
+```text
+80 processes
+79 relationships
+```
+
+That makes sense because, in this snapshot, one process (`PID 1`) is the root and has no parent relationship.
+
+Now we can implement **10C — Process Lifecycle**.
+
+The core idea is very important, so let's not jump straight into code.
+
+# 🌌 10C — Process Lifecycle
+
+Galaxy currently knows:
+
+```text
+Cycle 1
+    ↓
+80 processes
+
+Cycle 2
+    ↓
+81 processes
+
+Cycle 3
+    ↓
+83 processes
+```
+
+But it doesn't yet know **what changed**.
+
+We want Galaxy to answer:
+
+```text
+Which process started?
+Which process is still running?
+Which process disappeared?
+```
+
+---
+
+# 1. The core idea
+
+Suppose Galaxy collects:
+
+### Collection 1
+
+```text
+A
+B
+C
+```
+
+Then 10 seconds later:
+
+### Collection 2
+
+```text
+A
+C
+D
+```
+
+Compare them:
+
+```text
+A → still running
+C → still running
+
+B → exited
+
+D → started
+```
+
+So:
+
+```text
+previous processes
+        │
+        │ compare
+        ▼
+current processes
+        │
+        ├── same      → running
+        ├── new       → started
+        └── missing   → exited
+```
+
+That's the entire core idea behind lifecycle tracking.
+
+---
+
+# 2. Why we use `entity_id`
+
+This is where the work from **9B/10B becomes useful**.
+
+We don't compare just:
+
+```text
+PID
+```
+
+because PIDs can be reused.
+
+We compare:
+
+```text
+entity_id
+```
+
+For example:
+
+```text
+pid:5000@1788950919.18
+```
+
+If PID 5000 dies and later gets reused:
+
+```text
+pid:5000@1788952000.55
+```
+
+these are two different processes.
+
+So our lifecycle tracker can safely distinguish them.
+
+---
+
+# 3. Create `ProcessLifecycleTracker`
+
+Create:
+
+```text
+core/graph/process_lifecycle.py
+```
+
+Start with:
+
+```python
+class ProcessLifecycleTracker:
+
+    def __init__(self):
+
+        self.previous_processes = set()
+
+    def update(self, observations):
+
+        current_processes = {
+            observation.entity_id
+            for observation in observations
+            if observation.entity_type == "process"
+        }
+
+        started = current_processes - self.previous_processes
+
+        exited = self.previous_processes - current_processes
+
+        running = current_processes & self.previous_processes
+
+        self.previous_processes = current_processes
+
+        return {
+            "started": started,
+            "running": running,
+            "exited": exited,
+        }
+```
+
+---
+
+# 4. Understand the code
+
+## `previous_processes`
+
+```python
+self.previous_processes = set()
+```
+
+This remembers the previous collection cycle.
+
+Initially:
+
+```text
+previous_processes = {}
+```
+
+more precisely, an empty set:
+
+```text
+set()
+```
+
+That's because Galaxy hasn't collected anything yet.
+
+---
+
+# 5. Current processes
+
+Every time we call:
+
+```python
+update(observations)
+```
+
+we create:
+
+```python
+current_processes = {
+    observation.entity_id
+    for observation in observations
+    if observation.entity_type == "process"
+}
+```
+
+Suppose we have:
+
+```text
+pid:1@A
+pid:2@B
+pid:6@C
+```
+
+Then:
+
+```text
+current_processes =
+{
+    pid:1@A,
+    pid:2@B,
+    pid:6@C
+}
+```
+
+---
+
+# 6. Detect started processes
+
+This line:
+
+```python
+started = current_processes - self.previous_processes
+```
+
+means:
+
+> Processes that exist now but didn't exist before.
+
+Example:
+
+```text
+previous:
+
+A
+B
+C
+
+current:
+
+A
+B
+C
+D
+```
+
+Then:
+
+```text
+current - previous
+```
+
+gives:
+
+```text
+D
+```
+
+Therefore:
+
+```text
+D = started
+```
+
+---
+
+# 7. Detect exited processes
+
+This:
+
+```python
+exited = self.previous_processes - current_processes
+```
+
+means:
+
+> Processes that existed before but don't exist now.
+
+Example:
+
+```text
+previous:
+
+A
+B
+C
+
+current:
+
+A
+C
+D
+```
+
+Then:
+
+```text
+previous - current
+```
+
+gives:
+
+```text
+B
+```
+
+So:
+
+```text
+B = exited
+```
+
+---
+
+# 8. Detect running processes
+
+This:
+
+```python
+running = current_processes & self.previous_processes
+```
+
+is the **intersection**.
+
+It means:
+
+> Processes present in both snapshots.
+
+Example:
+
+```text
+previous:
+
+A
+B
+C
+
+current:
+
+A
+C
+D
+```
+
+Intersection:
+
+```text
+A
+C
+```
+
+So:
+
+```text
+A → running
+C → running
+```
+
+---
+
+# 9. Why update `previous_processes` at the end?
+
+This is extremely important:
+
+```python
+self.previous_processes = current_processes
+```
+
+We do it **after the comparison**.
+
+Otherwise we'd accidentally compare:
+
+```text
+current
+vs
+current
+```
+
+and everything would appear to be running.
+
+The lifecycle cycle is:
+
+```text
+old state
+   ↓
+collect new state
+   ↓
+compare
+   ↓
+identify changes
+   ↓
+new state becomes old state
+```
+
+---
+
+# 10. Test it before connecting it to Galaxy
+
+Create:
+
+```text
+tests/test_process_lifecycle.py
+```
+
+Use:
+
+```python
+from core.graph.process_lifecycle import ProcessLifecycleTracker
+
+
+class FakeObservation:
+
+    def __init__(self, entity_id):
+        self.entity_id = entity_id
+        self.entity_type = "process"
+
+
+tracker = ProcessLifecycleTracker()
+
+
+# First collection
+cycle_1 = [
+    FakeObservation("pid:1@A"),
+    FakeObservation("pid:2@B"),
+    FakeObservation("pid:3@C"),
+]
+
+result = tracker.update(cycle_1)
+
+print("Cycle 1")
+print("Started:", result["started"])
+print("Running:", result["running"])
+print("Exited:", result["exited"])
+
+
+# Second collection
+cycle_2 = [
+    FakeObservation("pid:1@A"),
+    FakeObservation("pid:3@C"),
+    FakeObservation("pid:4@D"),
+]
+
+result = tracker.update(cycle_2)
+
+print()
+print("Cycle 2")
+print("Started:", result["started"])
+print("Running:", result["running"])
+print("Exited:", result["exited"])
+```
+
+Run:
+
+```bash
+python -m tests.test_process_lifecycle
+```
+
+You should get approximately:
+
+```text
+Cycle 1
+Started: {'pid:1@A', 'pid:2@B', 'pid:3@C'}
+Running: set()
+Exited: set()
+
+Cycle 2
+Started: {'pid:4@D'}
+Running: {'pid:1@A', 'pid:3@C'}
+Exited: {'pid:2@B'}
+```
+
+The order of items in a Python `set` can differ, so don't worry about ordering.
+
+---
+
+# 🌌 Important observation about the first cycle
+
+You might wonder:
+
+> Why does the first collection say every process is `started`?
+
+Because Galaxy has no previous state.
+
+It sees:
+
+```text
+previous = empty
+current = 80 processes
+```
+
+Therefore:
+
+```text
+80 - 0 = 80 started
+```
+
+That's mathematically correct, but semantically we may not want to call them "started" because Galaxy didn't actually witness their creation.
+
+This is an important observability concept.
+
+Later we'll probably distinguish:
+
+```text
+FIRST_SEEN
+```
+
+from:
+
+```text
+STARTED
+```
+
+For now, we're keeping the implementation simple.
+
+---
+
+# 11. Connect it to the Orchestrator
+
+Once the test works, modify:
+
+```text
+core/orchestrator.py
+```
+
+Import:
+
+```python
+from core.graph.process_lifecycle import ProcessLifecycleTracker
+```
+
+Then in `__init__()`:
+
+```python
+self.lifecycle_tracker = ProcessLifecycleTracker()
+```
+
+So:
+
+```python
+class Orchestrator:
+
+    def __init__(self):
+
+        self.collectors = [
+            SystemCollector(),
+            ProcessCollector(),
+        ]
+
+        self.store = SQLiteStore()
+
+        self.lifecycle_tracker = ProcessLifecycleTracker()
+```
+
+---
+
+# 12. Call the lifecycle tracker
+
+Inside `run_once()`, after you have:
+
+```python
+process_observations
+```
+
+call:
+
+```python
+lifecycle = self.lifecycle_tracker.update(
+    process_observations
+)
+```
+
+Your flow becomes:
+
+```text
+collect
+   ↓
+save observations
+   ↓
+process observations
+   ↓
+identity map
+   ↓
+relationships
+   ↓
+lifecycle comparison
+   ↓
+save relationships
+```
+
+---
+
+# 13. Temporarily print lifecycle information
+
+For learning, I recommend printing it before we create another database table.
+
+Add:
+
+```python
+print(
+    f"Lifecycle: "
+    f"{len(lifecycle['started'])} started, "
+    f"{len(lifecycle['running'])} running, "
+    f"{len(lifecycle['exited'])} exited"
+)
+```
+
+Then:
+
+```bash
+python main.py
+```
+
+You might see:
+
+```text
+GALAXY
+======
+
+Collecting every 10 seconds. Press Ctrl+C to stop.
+
+[15:58:10] Collected 81 observations, derived 79 relationships
+Lifecycle: 81 started, 0 running, 0 exited
+
+[15:58:22] Collected 81 observations, derived 79 relationships
+Lifecycle: 0 started, 81 running, 0 exited
+
+[15:58:34] Collected 83 observations, derived 81 relationships
+Lifecycle: 2 started, 81 running, 0 exited
+```
+
+And if a process disappears:
+
+```text
+Lifecycle: 1 started, 80 running, 1 exited
+```
+
+🎯 Now Galaxy is detecting change.
+
+---
+
+# 14. But don't store lifecycle yet
+
+This is intentional.
+
+Right now we have:
+
+```text
+Observations
+Relationships
+Lifecycle detection
+```
+
+But lifecycle events are **derived events**.
+
+Before creating another database table, we should first make sure the detection logic is correct.
+
+So:
+
+```text
+10A Identity Map                 ✅
+10B Identity Relationships       ✅
+10C Lifecycle Detection          ← NOW
+```
+
+---
+
+# 🌌 What comes after 10C?
+
+Once lifecycle detection works, the next three milestones I'd recommend are:
+
+```text
+11A — Persist lifecycle events
+11B — Query lifecycle events
+11C — Process tree with real names + lifecycle
+```
+
+Then Galaxy can answer things like:
+
+```text
+What processes started recently?
+What processes exited?
+Which process spawned this process?
+What is the current process tree?
+```
+
+After that we move into:
+
+```text
+12 — Network Intelligence
+```
+
+where we start connecting:
+
+```text
+Process
+   │
+   ├── parent_of
+   │
+   ├── listens_on
+   │
+   └── connects_to
+          │
+          ▼
+       Network endpoint
+```
+
+That's where the **Galaxy graph** becomes significantly more interesting.
+
+---
+
+## 🎯 Your task now
+
+Implement only:
+
+```text
+core/graph/process_lifecycle.py
+```
+
+then:
+
+```bash
+python -m tests.test_process_lifecycle
+```
+
+Make sure you get the expected:
+
+```text
+Cycle 1
+started = all
+running = 0
+exited = 0
+
+Cycle 2
+started = new
+running = existing
+exited = missing
+```
+
+Then connect it to `Orchestrator`.
+
+**Don't create the lifecycle database table yet.** Once we see your actual `main.py` output with `started/running/exited`, we'll do **11A — persist lifecycle events** properly.
+
+
+
+Excellent. ✅ **10C is working.** Your output is exactly what we wanted.
+
+For example:
+
+```text
+Lifecycle: 81 started, 0 running, 0 exited
+```
+
+First cycle = Galaxy has no previous snapshot.
+
+Then:
+
+```text
+Lifecycle: 2 started, 81 running, 0 exited
+```
+
+Two new process identities appeared.
+
+Then:
+
+```text
+Lifecycle: 0 started, 81 running, 2 exited
+```
+
+Two identities disappeared.
+
+So Galaxy is now detecting **process lifecycle changes**, not just collecting snapshots.
+
+---
+
+# 🌌 Next: Milestone 11A — Persist Lifecycle Events
+
+Until now lifecycle information is only printed:
+
+```text
+Lifecycle: 2 started, 81 running, 0 exited
+```
+
+If you stop Galaxy:
+
+```text
+Ctrl+C
+```
+
+that lifecycle information is gone.
+
+That's not what we want.
+
+We want:
+
+```text
+Process started
+       ↓
+Galaxy detects it
+       ↓
+Galaxy stores event
+       ↓
+We can query it later
+```
+
+So 11A is:
+
+> **Create a persistent lifecycle event store.**
+
+---
+
+# 11A.1 — What should we store?
+
+Don't store just:
+
+```text
+started = 2
+```
+
+because we need to know **which processes**.
+
+For example:
+
+```text
+PROCESS_STARTED
+pid:47034@1788950919.55
+2026-09-09 16:01:15
+```
+
+And:
+
+```text
+PROCESS_EXITED
+pid:45000@1788950800.21
+2026-09-09 16:01:15
+```
+
+So each lifecycle event needs:
+
+```text
+event type
+process identity
+timestamp
+```
+
+---
+
+# 11A.2 — Create a Lifecycle Event model
+
+Create:
+
+```text
+core/models/lifecycle_event.py
+```
+
+Put:
+
+```python
+from dataclasses import dataclass
+from datetime import datetime
+
+
+@dataclass
+class LifecycleEvent:
+
+    event_type: str
+    entity_type: str
+    entity_id: str
+    timestamp: datetime
+```
+
+---
+
+# 🧠 Why a separate model?
+
+We already have:
+
+```text
+Observation
+Relationship
+```
+
+These mean different things.
+
+### Observation
+
+```text
+"What did we see?"
+```
+
+Example:
+
+```text
+PID 39038
+CPU = 4.2%
+memory = 0.3%
+```
+
+### Relationship
+
+```text
+"What is connected to what?"
+```
+
+Example:
+
+```text
+PID 1539
+    parent_of
+PID 39038
+```
+
+### LifecycleEvent
+
+```text
+"What changed?"
+```
+
+Example:
+
+```text
+PID 39038
+PROCESS_STARTED
+```
+
+Keeping these concepts separate is good architecture.
+
+---
+
+# 11A.3 — Add lifecycle table to SQLite
+
+Open:
+
+```text
+core/storage/sqlite_store.py
+```
+
+Inside `_create_table()` add:
+
+```python
+self.conn.execute("""
+    CREATE TABLE IF NOT EXISTS lifecycle_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_type TEXT,
+        entity_type TEXT,
+        entity_id TEXT,
+        timestamp TEXT
+    )
+""")
+```
+
+So your `_create_table()` will create both:
+
+```text
+observations
+lifecycle_events
+```
+
+For example:
+
+```text
+observations
+────────────────────────
+id
+source
+entity_type
+entity_id
+timestamp
+data
+
+
+lifecycle_events
+────────────────────────
+id
+event_type
+entity_type
+entity_id
+timestamp
+```
+
+Then:
+
+```python
+self.conn.commit()
+```
+
+---
+
+# 11A.4 — Add `save_lifecycle_events()`
+
+Still in:
+
+```text
+core/storage/sqlite_store.py
+```
+
+add:
+
+```python
+def save_lifecycle_events(self, events):
+
+    rows = [
+        (
+            event.event_type,
+            event.entity_type,
+            event.entity_id,
+            event.timestamp.isoformat(),
+        )
+        for event in events
+    ]
+
+    self.conn.executemany(
+        """
+        INSERT INTO lifecycle_events
+            (event_type, entity_type, entity_id, timestamp)
+        VALUES (?, ?, ?, ?)
+        """,
+        rows,
+    )
+
+    self.conn.commit()
+```
+
+---
+
+# 🧠 What is happening?
+
+Suppose lifecycle detection returns:
+
+```text
+started:
+pid:5000@A
+pid:5001@B
+
+exited:
+pid:4000@C
+```
+
+We convert them into:
+
+```text
+LifecycleEvent(
+    event_type="process_started",
+    entity_type="process",
+    entity_id="pid:5000@A",
+    timestamp=...
+)
+```
+
+etc.
+
+Then SQLite stores them.
+
+---
+
+# 11A.5 — Convert lifecycle result into events
+
+Now modify:
+
+```text
+core/orchestrator.py
+```
+
+Import:
+
+```python
+from core.models.lifecycle_event import LifecycleEvent
+```
+
+Then after:
+
+```python
+lifecycle = self.lifecycle_tracker.update(
+    process_observations
+)
+```
+
+create:
+
+```python
+lifecycle_events = []
+
+for entity_id in lifecycle["started"]:
+
+    lifecycle_events.append(
+        LifecycleEvent(
+            event_type="process_started",
+            entity_type="process",
+            entity_id=entity_id,
+            timestamp=process_observations[0].timestamp,
+        )
+    )
+
+for entity_id in lifecycle["exited"]:
+
+    lifecycle_events.append(
+        LifecycleEvent(
+            event_type="process_exited",
+            entity_type="process",
+            entity_id=entity_id,
+            timestamp=process_observations[0].timestamp,
+        )
+    )
+```
+
+Then:
+
+```python
+self.store.save_lifecycle_events(
+    lifecycle_events
+)
+```
+
+---
+
+# ⚠️ One improvement
+
+The code above uses:
+
+```python
+process_observations[0].timestamp
+```
+
+That's okay because all observations from one collection cycle currently share the same `now`.
+
+But I want us to make that explicit later.
+
+For now, it's fine for 11A.
+
+---
+
+# 11A.6 — Your `run_once()` flow
+
+Conceptually it is now:
+
+```text
+                    run_once()
+                        │
+                        ▼
+                 collect observations
+                        │
+                        ▼
+                 save observations
+                        │
+                        ▼
+              process observations
+                        │
+              ┌─────────┴─────────┐
+              ▼                   ▼
+        identity map         lifecycle tracker
+              │                   │
+              ▼                   ▼
+        relationships       started/exited
+              │                   │
+              ▼                   ▼
+     save relationships    lifecycle events
+                                  │
+                                  ▼
+                         save lifecycle events
+```
+
+This is becoming a proper pipeline.
+
+---
+
+# 11A.7 — Add a query method
+
+We should be able to verify the database.
+
+Add to `SQLiteStore`:
+
+```python
+def all_lifecycle_events(self):
+
+    cursor = self.conn.execute(
+        """
+        SELECT event_type,
+               entity_type,
+               entity_id,
+               timestamp
+        FROM lifecycle_events
+        ORDER BY timestamp
+        """
+    )
+
+    return cursor.fetchall()
+```
+
+---
+
+# 11A.8 — Test the database
+
+Create:
+
+```text
+tests/test_lifecycle_store.py
+```
+
+```python
+from core.storage.sqlite_store import SQLiteStore
+
+
+store = SQLiteStore()
+
+events = store.all_lifecycle_events()
+
+print("Total lifecycle events:")
+print(len(events))
+
+print()
+
+for event in events[-10:]:
+    print(event)
+```
+
+Run:
+
+```bash
+python -m tests.test_lifecycle_store
+```
+
+You should eventually see something like:
+
+```text
+Total lifecycle events:
+5
+
+('process_started',
+ 'process',
+ 'pid:47034@1788950919.55',
+ '2026-09-09T16:01:15...')
+
+('process_exited',
+ 'process',
+ 'pid:45000@1788950800.21',
+ '2026-09-09T16:01:15...')
+```
+
+---
+
+# 🌌 Important: What we have now
+
+Galaxy has three different persistent layers:
+
+```text
+┌──────────────────────────────────────┐
+│             OBSERVATIONS             │
+│                                      │
+│ CPU, memory, process information...  │
+└──────────────────────────────────────┘
+
+┌──────────────────────────────────────┐
+│            RELATIONSHIPS             │
+│                                      │
+│ parent_of, child_of...               │
+└──────────────────────────────────────┘
+
+┌──────────────────────────────────────┐
+│          LIFECYCLE EVENTS            │
+│                                      │
+│ started, exited...                   │
+└──────────────────────────────────────┘
+```
+
+This is a very important point in Galaxy's architecture.
+
+---
+
+# 🌌 11B — Query Lifecycle Events
+
+After 11A works, we'll build queries such as:
+
+```python
+get_recent_starts()
+```
+
+```python
+get_recent_exits()
+```
+
+```python
+get_process_history(entity_id)
+```
+
+Then we can ask Galaxy:
+
+```text
+Which processes started recently?
+```
+
+and:
+
+```text
+Which processes exited recently?
+```
+
+The flow becomes:
+
+```text
+SQLite
+   ↓
+Lifecycle events
+   ↓
+Query layer
+   ↓
+Useful information
+```
+
+---
+
+# 🌌 11C — Process Tree + Real Process Information
+
+Then we'll combine the things we've built.
+
+Currently our tree might say:
+
+```text
+pid:1@1788950919.18
+├── pid:2@1788950919.23
+│   └── pid:6@1788950919.5
+└── pid:43@1788950919.78
+```
+
+11C will turn that into something much more useful:
+
+```text
+systemd [1]
+├── init-systemd(Ubuntu) [2]
+│   └── init [6]
+└── systemd-journald [43]
+```
+
+And eventually:
+
+```text
+systemd [1]
+├── sshd [1539]
+│   └── python [47034]
+│       CPU: 3.9%
+│       Memory: 0.21%
+│       Status: running
+└── systemd-journald [43]
+```
+
+Now the **graph + observations** are working together.
+
+---
+
+# 🌐 Then Milestone 12 — Network Intelligence
+
+After the process side is solid, we'll add network information.
+
+The eventual picture becomes:
+
+```text
+                    HOST
+                     │
+                     ▼
+                  PROCESS
+              ┌──────┼──────┐
+              │      │      │
+              ▼      ▼      ▼
+           parent   CPU    memory
+              │
+              ▼
+           PROCESS
+              │
+              │ connects_to
+              ▼
+          ENDPOINT
+              │
+              ▼
+          IP:PORT
+```
+
+For example:
+
+```text
+python [47034]
+       │
+       │ connects_to
+       ▼
+127.0.0.1:5432
+```
+
+That's when Galaxy starts becoming a real **system relationship graph**.
+
+---
+
+# 🎯 Your roadmap from here
+
+```text
+10A Identity Map                    ✅
+10B Identity Relationships          ✅
+10C Lifecycle Detection             ✅
+
+11A Persist Lifecycle Events        ← NOW
+11B Query Lifecycle Events
+11C Rich Process Tree
+
+12A Network Interfaces
+12B Listening Ports
+12C Process → Network Connections
+
+13A Service Discovery
+13B Service → Process
+13C Service Graph
+
+14A Application Identification
+14B Application → Process
+14C Application Graph
+
+15A Log Collection
+15B Log → Entity
+15C Log Correlation
+
+16A Correlation Engine
+16B Detection
+16C Insights
+
+17   API
+18   UI / Galaxy Visualization
+```
+
+### For now, do only **11A**.
+
+Implement:
+
+```text
+core/models/lifecycle_event.py
+        ↓
+SQLite lifecycle_events table
+        ↓
+save_lifecycle_events()
+        ↓
+Orchestrator
+        ↓
+tests/test_lifecycle_store.py
+```
+
+Then run Galaxy for a few cycles and run:
+
+```bash
+python -m tests.test_lifecycle_store
+```
+
+Once we confirm the events are actually being persisted, we'll do **11B — querying lifecycle history**.
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+Lifecycle db need to check and logic also ;;;;;;;;;;;;;;;;;;;;
