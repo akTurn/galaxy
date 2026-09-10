@@ -9,6 +9,21 @@ from core.models.observation import Observation
 
 class NetworkCollector:
 
+
+    def _address_family(self, family):
+
+        if family == socket.AF_INET:
+            return "IPv4"
+
+        if family == socket.AF_INET6:
+            return "IPv6"
+
+        if hasattr(socket, "AF_PACKET") and family == socket.AF_PACKET:
+            return "MAC"
+
+        return str(family)
+
+
     def collect(self):
 
         observations = []
@@ -34,7 +49,8 @@ class NetworkCollector:
             for address in addresses:
 
                 interface_data["addresses"].append({
-                    "family": str(address.family),
+                    #"family": str(address.family),
+                    "family": self._address_family(address.family),
                     "address": address.address,
                     "netmask": address.netmask,
                     "broadcast": address.broadcast,
@@ -100,8 +116,8 @@ class NetworkCollector:
 
             port_data = {
                 "protocol": protocol,
-                "address": address,
-                "port": port,
+                "local_address": address,
+                "local_port": port,
                 #"pid": pid,
                 "status": connection.status,
             }
@@ -169,3 +185,253 @@ class NetworkCollector:
 
 
         return observations
+
+
+
+#     #######/*****Yes — you spotted an important architectural inconsistency.
+
+#  Your **SystemCollector**, **ProcessCollector**, and **NetworkCollector** actually have the same _outer structure_. The difference is that the **data inside each Observation** is different because they represent different kinds of entities.
+
+#  ## The common structure
+
+#  All three ultimately do this:
+
+# ```
+# Collector
+#    ↓
+# list[Observation]
+#    ↓
+# Observation(
+#     source=...,
+#     entity_type=...,
+#     entity_id=...,
+#     timestamp=...,
+#     data={...}
+# )
+# ```
+
+#  Your model is:
+
+# ```
+# @dataclass
+# class Observation:
+#     source: str
+#     entity_type: str
+#     entity_id: str
+#     timestamp: datetime
+#     data: dict
+# ```
+
+#  So this is consistent.
+
+#  ### System
+
+#  You create **one host observation**:
+
+# ```
+# Observation(
+#     source="system",
+#     entity_type="host",
+#     entity_id="localhost",
+#     timestamp=...,
+#     data={
+#         "cpu": ...,
+#         "memory": ...,
+#         "disk": ...,
+#         "os": ...,
+#         "hostname": ...,
+#         "uptime": ...,
+#     },
+# )
+# ```
+
+#  ### Process
+
+#  You create **one observation per process**:
+
+# ```
+# Observation(
+#     source="process",
+#     entity_type="process",
+#     entity_id="pid:...",
+#     timestamp=...,
+#     data={
+#         "pid": ...,
+#         "name": ...,
+#         "cpu_percent": ...,
+#         "memory_percent": ...,
+#         "status": ...,
+#         "username": ...,
+#         "parent_pid": ...,
+#         "executable": ...,
+#         "command_line": ...,
+#         "create_time": ...,
+#     },
+# )
+# ```
+
+#  ### Network
+
+#  You create **multiple types of observations** from one collector:
+
+# ```
+# NetworkCollector
+#        ↓
+#        ├── network_interface
+#        ├── listening_port
+#        └── network_connection
+# ```
+
+#  That's the part that looks different.
+
+#  But it's not actually violating your architecture.
+
+#  ## Why NetworkCollector has three types
+
+#  Because `psutil` exposes several different network concepts:
+
+# ```
+# Network
+# ├── Interfaces
+# ├── Listening ports
+# └── Connections
+# ```
+
+#  Therefore your collector produces:
+
+# ```
+# Observation(
+#     entity_type="network_interface",
+#     ...
+# )
+# ```
+
+#  then:
+
+# ```
+# Observation(
+#     entity_type="listening_port",
+#     ...
+# )
+# ```
+
+#  then:
+
+# ```
+# Observation(
+#     entity_type="network_connection",
+#     ...
+# )
+# ```
+
+#  That's perfectly valid because **`Observation` is your universal envelope**.
+
+#  Think of it like this:
+
+# ```
+#                  Observation
+#                       │
+#           ┌───────────┼───────────┐
+#           │           │           │
+#         Host       Process      Network
+#           │           │           │
+#        data={}      data={}      data={}
+# ```
+
+#  The `data` dictionary is allowed to contain fields appropriate to that entity.
+
+#  ## But there IS one thing I'd improve
+
+#  Your NetworkCollector currently has:
+
+# ```
+# for connection in connections:
+#     ...
+#     # create listening_port
+
+# for connection in connections:
+#     ...
+#     # create network_connection
+# ```
+
+#  So you're scanning the same `connections` list twice.
+
+#  That's not necessarily wrong, but structurally I'd eventually make NetworkCollector cleaner:
+
+# ```
+# NetworkCollector
+# │
+# ├── collect_interfaces()
+# │
+# ├── collect_listening_ports()
+# │
+# └── collect_connections()
+# ```
+
+#  and then:
+
+# ```
+# def collect(self):
+#     observations = []
+
+#     observations.extend(self.collect_interfaces())
+#     observations.extend(self.collect_listening_ports())
+#     observations.extend(self.collect_connections())
+
+#     return observations
+# ```
+
+#  **But don't change that yet.**
+
+#  Your current architecture is working.
+
+#  ### The important rule for Galaxy
+
+#  Keep this invariant:
+
+# ```
+# EVERY collector
+#         ↓
+# list[Observation]
+# ```
+
+#  and:
+
+# ```
+# EVERY Observation
+#         ↓
+# source
+# entity_type
+# entity_id
+# timestamp
+# data
+# ```
+
+#  Then the contents of `data` can differ.
+
+#  That's actually a **good design**, not a problem.
+
+#  So your current architecture is:
+
+# ```
+# SystemCollector
+#       ↓
+# [Observation(host)]
+
+# ProcessCollector
+#       ↓
+# [Observation(process), Observation(process), ...]
+
+# NetworkCollector
+#       ↓
+# [
+#   Observation(network_interface),
+#   Observation(network_interface),
+#   Observation(listening_port),
+#   Observation(network_connection),
+#   ...
+# ]
+# ```
+
+#  **That is consistent.
+# ** The NetworkCollector isn't supposed to have the same data fields as ProcessCollector; it is supposed to use the same **Observation contract**.
