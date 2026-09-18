@@ -1,0 +1,776 @@
+Exactly. Since your `SQLiteStore` method is:
+
+```
+s.all_relationships()
+```
+
+ we can use that consistently.
+
+ ### Latest relationship
+
+```
+python -c "from core.storage.sqlite_store import SQLiteStore; s=SQLiteStore(); r=s.all_relationships(); print(r[-1] if r else None)"
+```
+
+ ### Latest 10 relationships
+
+```
+python -c "from core.storage.sqlite_store import SQLiteStore; s=SQLiteStore(); r=s.all_relationships(); print(*r[-10:], sep='\n')"
+```
+
+ ### All relationships
+
+```
+python -c "from core.storage.sqlite_store import SQLiteStore; s=SQLiteStore(); print(*s.all_relationships(), sep='\n')"
+```
+
+ ### Only `listens_on`
+
+```
+python -c "from core.storage.sqlite_store import SQLiteStore; s=SQLiteStore(); print(*[r for r in s.all_relationships() if r[2] == 'listens_on'], sep='\n')"
+```
+
+ ### Only `has_connection`
+
+```
+python -c "from core.storage.sqlite_store import SQLiteStore; s=SQLiteStore(); print(*[r for r in s.all_relationships() if r[2] == 'has_connection'], sep='\n')"
+```
+
+ ### Count relationships
+
+```
+python -c "from core.storage.sqlite_store import SQLiteStore; s=SQLiteStore(); print(len(s.all_relationships()))"
+```
+
+ ### Count by relationship type
+
+```
+python -c "from core.storage.sqlite_store import SQLiteStore; from collections import Counter; s=SQLiteStore(); print(Counter(r[2] for r in s.all_relationships()))"
+```
+
+ Expected style:
+
+```
+Counter({
+    'has_connection': 35,
+    'listens_on': 15
+})
+```
+
+ ### Relationships for one process
+
+ For example PID `1648`:
+
+```
+python -c "from core.storage.sqlite_store import SQLiteStore; s=SQLiteStore(); print(*[r for r in s.all_relationships() if r[1].startswith('pid:1648@')], sep='\n')"
+```
+
+ ### All relationships involving a specific entity
+
+```
+python -c "from core.storage.sqlite_store import SQLiteStore; s=SQLiteStore(); x='pid:1648@1789378376.31'; print(*[r for r in s.all_relationships() if r[1] == x or r[4] == x], sep='\n')"
+```
+
+ Your tuple structure is:
+
+```
+0 = source_entity_type
+1 = source_entity_id
+2 = relationship_type
+3 = target_entity_type
+4 = target_entity_id
+5 = timestamp
+```
+
+ So for your result:
+
+```
+('process',
+ 'pid:1648@1789378376.31',
+ 'has_connection',
+ 'network_connection',
+ 'TCP:127.0.0.1:52810-127.0.0.1:44281',
+ '2026-09-14T10:51:55.969001+00:00')
+```
+
+ `r[2]` is the relationship type and `r[5]` is the timestamp.
+
+
+
+
+
+
+
+
+ Absolutely. Let's go through **your complete code line by line**, starting with `all_relationships()`, then `current_relationships()`.
+
+ ## 1\. `all_relationships()`
+
+ Your code:
+
+```
+def all_relationships(self):
+    cursor = self.conn.execute(
+        """
+        SELECT
+            source_entity_type,
+            source_entity_id,
+            relationship_type,
+            target_entity_type,
+            target_entity_id,
+            timestamp
+        FROM relationships
+        ORDER BY id ASC
+        """
+    )
+
+    return cursor.fetchall()
+```
+
+ ### Line 1
+
+```
+def all_relationships(self):
+```
+
+ This defines a method called `all_relationships`.
+
+ `self` means this method belongs to your class/object.
+
+ So when you do:
+
+```
+self.all_relationships()
+```
+
+ Python runs this function.
+
+---
+
+ ### Line 2
+
+```
+cursor = self.conn.execute(
+```
+
+ `self.conn` is your database connection.
+
+ `.execute()` tells the database:
+
+ > "Run this SQL query."
+
+ The result of the query is stored in `cursor`.
+
+ You can think of `cursor` as something that contains the rows returned by the database.
+
+---
+
+ ### Lines 3–12
+
+```
+SELECT
+    source_entity_type,
+    source_entity_id,
+    relationship_type,
+    target_entity_type,
+    target_entity_id,
+    timestamp
+FROM relationships
+ORDER BY id ASC
+```
+
+ This is the SQL query.
+
+ ### `SELECT`
+
+```
+SELECT
+    source_entity_type,
+    source_entity_id,
+    relationship_type,
+    target_entity_type,
+    target_entity_id,
+    timestamp
+```
+
+ You're asking the database to give you these **6 columns**.
+
+ So each returned row looks like:
+
+```
+(
+    source_entity_type,  # [0]
+    source_entity_id,    # [1]
+    relationship_type,   # [2]
+    target_entity_type,  # [3]
+    target_entity_id,    # [4]
+    timestamp            # [5]
+)
+```
+
+ For example:
+
+```
+(
+    "user",
+    10,
+    "friend",
+    "user",
+    20,
+    1726500000
+)
+```
+
+---
+
+ ### `FROM relationships`
+
+```
+FROM relationships
+```
+
+ This tells the database:
+
+ > Get these columns from the `relationships` table.
+
+---
+
+ ### `ORDER BY id ASC`
+
+```
+ORDER BY id ASC
+```
+
+ This tells the database:
+
+ > Return the rows starting with the smallest `id` and ending with the largest `id`.
+
+ For example:
+
+```
+id 1
+id 2
+id 3
+id 4
+```
+
+ So the database gives your Python code the rows in that order.
+
+ **Important:** you're ordering by `id`, **not by `timestamp`**.
+
+---
+
+ ### `return cursor.fetchall()`
+
+```
+return cursor.fetchall()
+```
+
+ `fetchall()` takes all the rows returned by the database and gives them back to Python.
+
+ For example, you might get:
+
+```
+[
+    ("user", 1, "friend", "user", 2, 100),
+    ("user", 1, "friend", "user", 3, 200),
+    ("user", 1, "friend", "user", 4, 150),
+]
+```
+
+ Notice the timestamps:
+
+```
+100
+200
+150
+```
+
+ They're not necessarily increasing because we ordered by `id`, not timestamp.
+
+---
+
+ # 2\. `current_relationships()`
+
+ Now your second function:
+
+```
+def current_relationships(self):
+
+    relationships = self.all_relationships()
+
+    latest = {}
+
+    for relationship in relationships:
+
+        key = (
+            relationship[0],
+            relationship[1],
+            relationship[2],
+        )
+
+        existing = latest.get(key)
+
+        if existing is None:
+            latest[key] = relationship
+            continue
+
+        if relationship[5] > existing[5]:
+            latest[key] = relationship
+
+    return list(latest.values())
+```
+
+ Let's go line by line.
+
+---
+
+ ### Line 1
+
+```
+def current_relationships(self):
+```
+
+ This defines a method called `current_relationships`.
+
+ Its job is to determine the **current/latest relationship**.
+
+---
+
+ ### Line 2
+
+```
+relationships = self.all_relationships()
+```
+
+ This calls the function we just discussed:
+
+```
+self.all_relationships()
+```
+
+ So the database is queried.
+
+ For example, `relationships` might now contain:
+
+```
+[
+    ("user", 1, "friend", "user", 2, 100),
+    ("user", 1, "friend", "user", 3, 200),
+    ("user", 1, "friend", "user", 4, 150),
+]
+```
+
+---
+
+ ### Line 3
+
+```
+latest = {}
+```
+
+ This creates an empty Python dictionary.
+
+ You're going to use this dictionary to store the **latest relationship for each key**.
+
+ Initially:
+
+```
+latest = {}
+```
+
+ Nothing is stored yet.
+
+---
+
+ ## The loop
+
+ ### Line 4
+
+```
+for relationship in relationships:
+```
+
+ This goes through the database rows **one at a time**.
+
+ Suppose:
+
+```
+relationships = [
+    row1,
+    row2,
+    row3
+]
+```
+
+ The loop does:
+
+```
+first iteration → row1
+second iteration → row2
+third iteration → row3
+```
+
+---
+
+ ## Creating the key
+
+ ### Lines 5–9
+
+```
+key = (
+    relationship[0],
+    relationship[1],
+    relationship[2],
+)
+```
+
+ Remember your row looks like:
+
+```
+(
+    source_entity_type,  # [0]
+    source_entity_id,    # [1]
+    relationship_type,   # [2]
+    target_entity_type,  # [3]
+    target_entity_id,    # [4]
+    timestamp            # [5]
+)
+```
+
+ So the key contains:
+
+```
+(
+    source_entity_type,
+    source_entity_id,
+    relationship_type
+)
+```
+
+ For example:
+
+```
+("user", 1, "friend")
+```
+
+ This means:
+
+ > "For user 1's `friend` relationship..."
+
+---
+
+ ## Why create this key?
+
+ Imagine you have:
+
+```
+user 1 → friend → user 2
+user 1 → friend → user 3
+user 1 → friend → user 4
+```
+
+ All three have:
+
+```
+("user", 1, "friend")
+```
+
+ as their key.
+
+ So they are treated as different versions/instances of the same logical relationship category.
+
+---
+
+ ## Get the existing relationship
+
+ ### Line
+
+```
+existing = latest.get(key)
+```
+
+ This asks the dictionary:
+
+ > "Do I already have a relationship with this key?"
+
+ Initially:
+
+```
+latest = {}
+```
+
+ So:
+
+```
+existing = None
+```
+
+---
+
+ ## First relationship
+
+ ### Lines
+
+```
+if existing is None:
+    latest[key] = relationship
+    continue
+```
+
+ If there isn't already a relationship with this key, save the current one.
+
+ For example:
+
+```
+key = ("user", 1, "friend")
+```
+
+ and:
+
+```
+relationship = ("user", 1, "friend", "user", 2, 100)
+```
+
+ Then:
+
+```
+latest[key] = relationship
+```
+
+ means your dictionary becomes:
+
+```
+{
+    ("user", 1, "friend"):
+        ("user", 1, "friend", "user", 2, 100)
+}
+```
+
+---
+
+ ### What does `continue` do?
+
+```
+continue
+```
+
+ means:
+
+ > Stop processing this iteration and move to the next relationship.
+
+ So it **doesn't execute** this part for the first relationship:
+
+```
+if relationship[5] > existing[5]:
+```
+
+---
+
+ # Second relationship
+
+ Suppose the second relationship is:
+
+```
+("user", 1, "friend", "user", 3, 200)
+```
+
+ The key is again:
+
+```
+("user", 1, "friend")
+```
+
+ This time:
+
+```
+existing = latest.get(key)
+```
+
+ finds the previous relationship:
+
+```
+("user", 1, "friend", "user", 2, 100)
+```
+
+ So `existing` is **not** `None`.
+
+ Therefore we don't enter:
+
+```
+if existing is None:
+```
+
+ Instead we reach:
+
+```
+if relationship[5] > existing[5]:
+```
+
+---
+
+ ## Comparing timestamps
+
+ Remember:
+
+```
+relationship[5]
+```
+
+ is the new relationship's timestamp.
+
+ And:
+
+```
+existing[5]
+```
+
+ is the timestamp we already saved.
+
+ So we're asking:
+
+```
+Is 200 > 100?
+```
+
+ Yes.
+
+ Therefore:
+
+```
+latest[key] = relationship
+```
+
+ replaces the old relationship with the newer one.
+
+ Now:
+
+```
+latest
+```
+
+ contains the timestamp `200` relationship.
+
+---
+
+ # Third relationship
+
+ Suppose the third row is:
+
+```
+("user", 1, "friend", "user", 4, 150)
+```
+
+ Again:
+
+```
+key = ("user", 1, "friend")
+```
+
+ We already have something stored.
+
+ So:
+
+```
+existing = latest.get(key)
+```
+
+ gives us the relationship with timestamp `200`.
+
+ Then:
+
+```
+if relationship[5] > existing[5]:
+```
+
+ becomes:
+
+```
+Is 150 > 200?
+```
+
+ No.
+
+ Therefore we **do nothing**.
+
+ The timestamp `200` relationship remains.
+
+---
+
+ # Finally
+
+ ### Last line
+
+```
+return list(latest.values())
+```
+
+ `latest` is a dictionary.
+
+ You only want the relationships, not the keys.
+
+ So:
+
+```
+latest.values()
+```
+
+ gets all the saved relationships.
+
+ Then:
+
+```
+list(...)
+```
+
+ turns them into a normal Python list.
+
+---
+
+ ## The whole process
+
+ Imagine your database gives you:
+
+```
+id | source | type   | target | timestamp
+---|--------|--------|--------|----------
+1  | user 1 | friend | user 2 | 100
+2  | user 1 | friend | user 3 | 200
+3  | user 1 | friend | user 4 | 150
+```
+
+ Because of:
+
+```
+ORDER BY id ASC
+```
+
+ Python receives:
+
+```
+100
+200
+150
+```
+
+ Your second function processes them:
+
+```
+100 → save it
+
+200 → 200 > 100 → replace it
+
+150 → 150 > 200 → don't replace it
+```
+
+ Final result:
+
+```
+200
+```
+
+ So the most important idea is:
+
+ > **`all_relationships()` decides the order in which rows are given to Python. `current_relationships()` then looks at those rows and explicitly compares their timestamps to find the newest one.**
+
+ That's why the second version is safer: **it doesn't assume that the database's `id` order is the same as timestamp order.**

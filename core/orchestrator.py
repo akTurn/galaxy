@@ -2,8 +2,11 @@
 from collectors.system import SystemCollector
 from collectors.process import ProcessCollector
 from collectors.network import NetworkCollector
+from collectors.service import ServiceCollector
 from core.storage.sqlite_store import SQLiteStore
 from core.relationships.process import process_relationships
+from core.relationships.network import network_relationships
+from core.relationships.service import service_relationships
 from core.graph.process_identity_map import ProcessIdentityMap
 from core.graph.process_lifecycle import ProcessLifecycleTracker
 from core.models.lifecycle_event import LifecycleEvent
@@ -18,6 +21,7 @@ class Orchestrator:
             SystemCollector(),
             ProcessCollector(),
             NetworkCollector(),
+            ServiceCollector(),
 
         ]
         self.store = SQLiteStore()
@@ -93,7 +97,7 @@ class Orchestrator:
         )
 
         # -------------------------
-        # 3. Derive relationships
+        # 5. Derive relationships
         # -------------------------
 
         all_relationships = []
@@ -109,9 +113,52 @@ class Orchestrator:
                 relationships
             )
 
+        # -------------------------
+        # 6. Network relationships
+        # -------------------------
+
+        for observation in all_observations:
+
+            if observation.entity_type not in (
+                "listening_port",
+                "network_connection",
+            ):
+                continue
+
+            
+
+            relationships = network_relationships(
+                observation,
+                identity_map
+            )
+
+            all_relationships.extend(
+                relationships
+            )
+        # -------------------------
+        # 7.Service relationships
+        # -------------------------
+
+        service_observations = [
+            observation
+            for observation in all_observations
+            if observation.entity_type == "service"
+        ]
+
+        for observation in service_observations:
+
+            relationships = service_relationships(
+                observation,
+                identity_map
+            )
+
+            all_relationships.extend(
+                relationships
+            )
+
 
         # -------------------------
-        # 4. Save relationships
+        # 8. Save relationships
         # -------------------------
 
         self.store.save_relationships(

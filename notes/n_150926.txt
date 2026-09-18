@@ -1,0 +1,1574 @@
+Perfect. Now we can implement **13D — Service → Process** against your actual architecture.
+
+ Your existing pieces fit together cleanly:
+
+```
+ServiceCollector
+      ↓
+service observations
+      ↓
+service_relationships()
+      ↓
+Relationship
+      ↑
+ProcessIdentityMap
+      ↑
+process observations
+```
+
+ There is one important detail: **your current `ServiceCollector` does not collect `MainPID` yet.** So the relationship layer has nothing reliable to map to a process.
+
+ I recommend making that the first small change.
+
+ ## Step 1 — Add MainPID to `ServiceCollector`
+
+ Change `collectors/service.py` to this:
+
+ collectors/service.py✓
+
+```
+import subprocess
+
+from datetime import datetime, timezone
+
+from core.models.observation import Observation
+
+class ServiceCollector:
+
+    def collect(self):
+
+        observations = []
+
+        result = subprocess.run(
+            [
+                "systemctl",
+                "list-units",
+                "--type=service",
+                "--all",
+                "--no-legend",
+                "--no-pager",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        now = datetime.now(timezone.utc)
+
+        for line in result.stdout.splitlines():
+
+            parts = line.split(None, 4)
+
+            if len(parts) < 4:
+                continue
+
+            unit = parts[0]
+            load_state = parts[1]
+            active_state = parts[2]
+            sub_state = parts[3]
+
+            if not unit.endswith(".service"):
+                continue
+
+            service_name = unit[:-8]
+
+            main_pid = self._get_main_pid(unit)
+
+            observations.append(
+                Observation(
+                    source="systemd",
+                    entity_type="service",
+                    entity_id=f"service:{service_name}",
+                    timestamp=now,
+                    data={
+                        "name": service_name,
+                        "unit": unit,
+                        "load_state": load_state,
+                        "active_state": active_state,
+                        "sub_state": sub_state,
+                        "main_pid": main_pid,
+                    },
+                )
+            )
+
+        return observations
+
+    def _get_main_pid(self, unit):
+
+        result = subprocess.run(
+            [
+                "systemctl",
+                "show",
+                unit,
+                "--property=MainPID",
+                "--value",
+                "--no-pager",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        value = result.stdout.strip()
+
+        if not value:
+            return None
+
+        try:
+            pid = int(value)
+        except ValueError:
+            return None
+
+        if pid == 0:
+            return None
+
+        return pid
+```
+
+ ### What this gives us
+
+ A service observation will now look like:
+
+```
+service:cron
+
+{
+    "name": "cron",
+    "unit": "cron.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "main_pid": 1234
+}
+```
+
+ For services without a running process:
+
+```
+"main_pid": None
+```
+
+ That's expected.
+
+ For example:
+
+```
+apt-daily.service
+    active_state = inactive
+    main_pid = None
+```
+
+ while:
+
+```
+cron.service
+    active_state = active
+    main_pid = 1234
+```
+
+ ## Step 2 — Create the service relationship module
+
+ Create:
+
+```
+core/relationships/service.py
+```
+
+ core/relationships/service.py✓
+
+```
+from core.models.relationship import Relationship
+
+def service_relationships(
+    service_observation,
+    identity_map,
+):
+    relationships = []
+
+    data = service_observation.data
+
+    main_pid = data.get("main_pid")
+
+    if not main_pid:
+        return relationships
+
+    process_entity_id = identity_map.get(main_pid)
+
+    if process_entity_id is None:
+        return relationships
+
+    relationships.append(
+        Relationship(
+            source_entity_type="service",
+            source_entity_id=service_observation.entity_id,
+
+            relationship_type="manages",
+
+            target_entity_type="process",
+            target_entity_id=process_entity_id,
+
+            timestamp=service_observation.timestamp,
+        )
+    )
+
+    return relationships
+```
+
+ This is deliberately small.
+
+ The relationship engine doesn't run `systemctl`.
+
+ It doesn't inspect processes.
+
+ It doesn't create identities.
+
+ It simply says:
+
+ > "The service says its MainPID is X. Does our current process identity map know X?"
+
+ If yes:
+
+```
+service → manages → process
+```
+
+ If no, no relationship is created.
+
+ That's exactly the separation we want.
+
+---
+
+ # Step 3 — Add it to the orchestrator
+
+ Add the import:
+
+```
+from core.relationships.service import service_relationships
+```
+
+ Then after you've created the `identity_map`, add:
+
+ Service relationship section✓
+
+```
+# -------------------------
+# Service relationships
+# -------------------------
+
+service_observations = [
+    observation
+    for observation in all_observations
+    if observation.entity_type == "service"
+]
+
+for observation in service_observations:
+
+    relationships = service_relationships(
+        observation,
+        identity_map
+    )
+
+    all_relationships.extend(
+        relationships
+    )
+```
+
+ So your relationship portion becomes:
+
+```
+Process observations
+        │
+        ▼
+ProcessIdentityMap
+        │
+        ├───────────────┐
+        │               │
+        ▼               ▼
+process_relationships  service_relationships
+        │               │
+        ▼               ▼
+ process relations   service → process
+        │               │
+        └───────┬───────┘
+                ▼
+        all_relationships
+```
+
+ ## Step 4 — Test it
+
+ Run:
+
+```
+python main.py
+```
+
+ Then inspect the relationship table using your existing store/query mechanism.
+
+ You want to see things like:
+
+```
+service:cron
+    manages
+process:pid:1234@...
+```
+
+ and:
+
+```
+service:containerd
+    manages
+process:pid:842@...
+```
+
+ The exact PIDs will obviously be different on your machine.
+
+---
+
+ # One important issue with your `ProcessIdentityMap`
+
+ You currently have:
+
+```
+self.by_pid[pid] = observation.entity_id
+```
+
+ This means:
+
+```
+PID 4217 → entity_id
+```
+
+ That's fine **for the current snapshot**.
+
+ And because `ProcessIdentityMap` is reconstructed on every `run_once()`:
+
+```
+identity_map = ProcessIdentityMap(
+    process_observations
+)
+```
+
+ we don't have the long-term PID-reuse problem here.
+
+ That's actually a good design.
+
+ Your long-term identity is still:
+
+```
+pid:4217@create_time
+```
+
+ while the temporary lookup key is simply:
+
+```
+4217
+```
+
+ So:
+
+```
+                    Current snapshot
+                         │
+PID 4217 ────────────────┤
+                         ▼
+             ProcessIdentityMap
+                         │
+                         ▼
+              pid:4217@123456.7
+```
+
+ That's exactly what we want.
+
+---
+
+ # One thing I'd test specifically
+
+ After implementing this, don't just check that relationships exist.
+
+ Check these three cases:
+
+ ### Active service
+
+```
+cron.service
+    main_pid = 123
+```
+
+ should produce:
+
+```
+service:cron
+    └── manages → process:...
+```
+
+ ### Inactive service
+
+```
+apt-daily.service
+    main_pid = 0
+```
+
+ should produce **no relationship**.
+
+ ### Unknown PID
+
+ If systemd reports a PID that isn't present in the current process snapshot, it should also produce **no relationship**, rather than inventing a process.
+
+ That gives us a very safe invariant:
+
+```
+Every service → process relationship
+must point to a process Galaxy actually observed.
+```
+
+ That's an important principle for the future correlation engine.
+
+---
+
+ ## One performance concern
+
+ The implementation above calls:
+
+```
+systemctl show <service>
+```
+
+ once for every service. With your **115 services**, that's 115 subprocess calls every collection cycle.
+
+ It will work and is a good way to get **13D conceptually correct first**, but I would **not leave it that way permanently**, especially since your Galaxy loop runs every 10 seconds.
+
+ Once the relationship is proven, we'll optimize service collection so MainPID information is obtained more efficiently.
+
+ ### After this
+
+ Your graph will have crossed an important boundary:
+
+```
+Service
+   │
+   │ manages
+   ▼
+Process
+   │
+   ├── listens_on → Port
+   │
+   └── connects_to → Network endpoint
+```
+
+ And that means Galaxy can finally reason about a real machine structure rather than independent observations.
+
+ **Implement these three changes first and run Galaxy.** Then show me the service→process relationship output (and, if anything fails, the traceback). We can verify 13D before touching **13F — Service tree / machine graph**
+ 
+ 
+ 
+ 
+ Perfect — that explains the missing relationship.
+
+ `ps` shows only the header:
+
+```
+PID COMMAND         COMMAND
+```
+
+ so **PID 23536 no longer exists** by the time you checked it.
+
+ That means we have a race:
+
+```
+ServiceCollector
+      │
+      ├── systemd reports wsl-pro
+      │      MainPID=23536
+      │
+      ▼
+ProcessCollector
+      │
+      └── PID 23536 is already gone
+```
+
+ Therefore:
+
+```
+service:wsl-pro → manages → process
+```
+
+ is correctly **not created**.
+
+ ## This is actually a successful test
+
+ Our invariant held:
+
+ > Galaxy only creates a Service → Process relationship when the process exists in the same observed snapshot.
+
+ So:
+
+```
+13D — Service ↔ Process
+```
+
+ is effectively **complete**. ✅
+
+ ### One subtle improvement
+
+ Because your collectors currently run sequentially, this can happen naturally:
+
+```
+t0  ServiceCollector sees PID 23536
+t1  process exits
+t2  ProcessCollector runs
+```
+
+ That's normal on a live operating system.
+
+ We should **not weaken the identity/relationship logic** to compensate.
+
+ Instead, the eventual architecture should treat each collection cycle as a snapshot with a small consistency window:
+
+```
+Collection cycle
+      │
+      ├── system
+      ├── processes
+      ├── services
+      └── network
+             │
+             ▼
+       relationships
+```
+
+ A transient process disappearing between collectors simply means:
+
+```
+no relationship this cycle
+```
+
+ which is much safer than creating a stale relationship.
+
+ ## Current milestone status
+
+```
+13A  Service model                 ✅
+13B  systemd collector             ✅
+13C  Service observations          ✅
+13D  Service → Process             ✅
+```
+
+ Your actual graph now supports:
+
+```
+service:nginx
+      │
+      │ manages
+      ▼
+pid:249@1789467275.65
+```
+
+ and the process can subsequently participate in the existing network relationships:
+
+```
+service:nginx
+      │
+      │ manages
+      ▼
+process
+      │
+      ├── listens_on ──→ TCP :80
+      │
+      └── connects_to ─→ remote endpoint
+```
+
+ ### Next: 13E
+
+ Now we should make sure **service observations and service relationships are persisted correctly and can be queried without mixing historical snapshots incorrectly**.
+
+ That's the next piece I'd implement before touching the service tree/graph.
+ 
+ 
+ 
+ 
+ Great — now we can implement **13E against your actual code** rather than guessing.
+
+ Your existing storage is already nicely generic. **Do not create a separate `services` table.** Services belong in `observations`, and `service → manages → process` belongs in `relationships`.
+
+ The missing piece is **snapshot identity**.
+
+ ## 13E plan
+
+ We'll make four changes:
+
+```
+1. Add collection_id to Observation
+2. Add collection_id to Relationship
+3. Persist collection_id in SQLite
+4. Add current/history query helpers
+```
+
+ This gives us:
+
+```
+Collection A
+├── service:nginx
+├── process:...
+└── service:nginx → manages → process:...
+
+Collection B
+├── service:nginx
+├── process:...
+└── service:nginx → manages → process:...
+```
+
+ instead of trying to infer snapshots from timestamps.
+
+---
+
+ # Step 1 — Update `Observation`
+
+ Change:
+
+```
+core/models/observation.py
+```
+
+ to:
+
+```
+from dataclasses import dataclass
+from datetime import datetime
+
+@dataclass
+class Observation:
+    source: str
+    entity_type: str
+    entity_id: str
+    timestamp: datetime
+    data: dict
+    collection_id: str | None = None
+```
+
+ The default is important because you already have observations in `galaxy.db`.
+
+ Old code that creates:
+
+```
+Observation(
+    source=...,
+    entity_type=...,
+    entity_id=...,
+    timestamp=...,
+    data=...,
+)
+```
+
+ will continue working.
+
+---
+
+ # Step 2 — Update `Relationship`
+
+ Change:
+
+```
+core/models/relationship.py
+```
+
+ to:
+
+```
+from dataclasses import dataclass
+from datetime import datetime
+
+@dataclass
+class Relationship:
+    source_entity_type: str
+    source_entity_id: str
+
+    relationship_type: str
+
+    target_entity_type: str
+    target_entity_id: str
+
+    timestamp: datetime
+    collection_id: str | None = None
+```
+
+ Again, old relationships remain compatible.
+
+---
+
+ # Step 3 — Add collection IDs in the orchestrator
+
+ At the **beginning of one `run_once()`**, generate a collection ID:
+
+```
+from uuid import uuid4
+```
+
+ Then:
+
+```
+collection_id = str(uuid4())
+```
+
+ For example:
+
+```
+a6d8f0c2-1b9e-4d...
+```
+
+ Now, after all collectors return their observations:
+
+```
+for observation in all_observations:
+    observation.collection_id = collection_id
+```
+
+ This is deliberately simple.
+
+ Your current architecture already gathers:
+
+```
+all_observations
+```
+
+ so we don't need to modify every collector.
+
+ Then, before saving relationships:
+
+```
+for relationship in all_relationships:
+    relationship.collection_id = collection_id
+```
+
+ Now everything from one run shares:
+
+```
+collection_id
+```
+
+---
+
+ # Step 4 — Modify SQLite
+
+ Your observations table currently has:
+
+```
+source
+entity_type
+entity_id
+timestamp
+data
+```
+
+ Add:
+
+```
+collection_id
+```
+
+ The table definition should become:
+
+```
+def _create_table(self):
+    self.conn.execute("""
+        CREATE TABLE IF NOT EXISTS observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT,
+            entity_type TEXT,
+            entity_id TEXT,
+            timestamp TEXT,
+            data TEXT,
+            collection_id TEXT
+        )
+    """)
+
+    self.conn.execute("""
+        CREATE TABLE IF NOT EXISTS lifecycle_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT,
+            entity_type TEXT,
+            entity_id TEXT,
+            timestamp TEXT
+        )
+    """)
+
+    self.conn.commit()
+```
+
+ ### But there's a catch
+
+ Your existing `galaxy.db` already has the `observations` table.
+
+ `CREATE TABLE IF NOT EXISTS` **will not add the new column**.
+
+ So run this once against your existing database:
+
+```
+sqlite3 galaxy.db
+```
+
+ Then:
+
+```
+ALTER TABLE observations ADD COLUMN collection_id TEXT;
+```
+
+ And:
+
+```
+ALTER TABLE relationships ADD COLUMN collection_id TEXT;
+```
+
+ Then:
+
+```
+.quit
+```
+
+ If your system doesn't have the `sqlite3` CLI, tell me and we'll do the migration through Python instead.
+
+---
+
+ # Step 5 — Update `_row_to_observation`
+
+ Currently you have:
+
+```
+source, entity_type, entity_id, timestamp, data = row
+```
+
+ Change it to:
+
+```
+def _row_to_observation(self, row):
+    (
+        source,
+        entity_type,
+        entity_id,
+        timestamp,
+        data,
+        collection_id,
+    ) = row
+
+    return Observation(
+        source=source,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        timestamp=datetime.fromisoformat(timestamp),
+        data=json.loads(data),
+        collection_id=collection_id,
+    )
+```
+
+---
+
+ # Step 6 — Update `save()`
+
+ Change your rows to:
+
+```
+rows = [
+    (
+        obs.source,
+        obs.entity_type,
+        obs.entity_id,
+        obs.timestamp.isoformat(),
+        json.dumps(obs.data),
+        obs.collection_id,
+    )
+    for obs in observations
+]
+```
+
+ And SQL:
+
+```
+self.conn.executemany(
+    """
+    INSERT INTO observations
+        (
+            source,
+            entity_type,
+            entity_id,
+            timestamp,
+            data,
+            collection_id
+        )
+    VALUES (?, ?, ?, ?, ?, ?)
+    """,
+    rows,
+)
+```
+
+---
+
+ # Step 7 — Update `all()`
+
+ You currently select five columns.
+
+ Change it to six:
+
+```
+cursor = self.conn.execute(
+    """
+    SELECT
+        source,
+        entity_type,
+        entity_id,
+        timestamp,
+        data,
+        collection_id
+    FROM observations
+    """
+)
+```
+
+ The rest can stay the same.
+
+---
+
+ # Step 8 — Add service queries
+
+ Now we can add clean service-specific helpers.
+
+ Inside `SQLiteStore`:
+
+```
+def services(self):
+    cursor = self.conn.execute(
+        """
+        SELECT
+            source,
+            entity_type,
+            entity_id,
+            timestamp,
+            data,
+            collection_id
+        FROM observations
+        WHERE entity_type = ?
+        ORDER BY timestamp ASC
+        """,
+        ("service",),
+    )
+
+    return [
+        self._row_to_observation(row)
+        for row in cursor.fetchall()
+    ]
+```
+
+ Then:
+
+```
+def latest_service(self, entity_id):
+    cursor = self.conn.execute(
+        """
+        SELECT
+            source,
+            entity_type,
+            entity_id,
+            timestamp,
+            data,
+            collection_id
+        FROM observations
+        WHERE entity_type = ?
+        AND entity_id = ?
+        ORDER BY timestamp DESC
+        LIMIT 1
+        """,
+        ("service", entity_id),
+    )
+
+    row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return self._row_to_observation(row)
+```
+
+ Now:
+
+```
+store.latest_service("service:nginx")
+```
+
+ means exactly what it says.
+
+---
+
+ # Step 9 — Current services
+
+ This is where `collection_id` becomes useful.
+
+ Add:
+
+```
+def services_in_collection(self, collection_id):
+    cursor = self.conn.execute(
+        """
+        SELECT
+            source,
+            entity_type,
+            entity_id,
+            timestamp,
+            data,
+            collection_id
+        FROM observations
+        WHERE entity_type = ?
+        AND collection_id = ?
+        ORDER BY entity_id ASC
+        """,
+        ("service", collection_id),
+    )
+
+    return [
+        self._row_to_observation(row)
+        for row in cursor.fetchall()
+    ]
+```
+
+ Now we can ask:
+
+```
+store.services_in_collection(collection_id)
+```
+
+ and get exactly the services discovered during that run.
+
+ No historical duplicates.
+
+---
+
+ # Step 10 — Remember the latest collection
+
+ We need one final piece to make:
+
+```
+store.current_services()
+```
+
+ possible.
+
+ The easiest approach for your current architecture is a small `collections` table.
+
+ Add:
+
+```
+def _create_collections_table(self):
+    self.conn.execute("""
+        CREATE TABLE IF NOT EXISTS collections (
+            collection_id TEXT PRIMARY KEY,
+            timestamp TEXT
+        )
+    """)
+
+    self.conn.commit()
+```
+
+ Call it from `__init__`:
+
+```
+self._create_table()
+self._create_relationships_table()
+self._create_collections_table()
+```
+
+ Then add:
+
+```
+def save_collection(self, collection_id, timestamp):
+    self.conn.execute(
+        """
+        INSERT INTO collections
+            (collection_id, timestamp)
+        VALUES (?, ?)
+        """,
+        (collection_id, timestamp.isoformat()),
+    )
+
+    self.conn.commit()
+```
+
+ And:
+
+```
+def latest_collection_id(self):
+    cursor = self.conn.execute(
+        """
+        SELECT collection_id
+        FROM collections
+        ORDER BY timestamp DESC
+        LIMIT 1
+        """
+    )
+
+    row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return row[0]
+```
+
+---
+
+ # Step 11 — Current service query
+
+ Now:
+
+```
+def current_services(self):
+    collection_id = self.latest_collection_id()
+
+    if collection_id is None:
+        return []
+
+    return self.services_in_collection(collection_id)
+```
+
+ That's much better than:
+
+```
+ORDER BY timestamp DESC
+```
+
+ because **current means current collection**, not merely "newest observation for each entity."
+
+---
+
+ # Step 12 — Relationships get the same treatment
+
+ Your relationship table needs the same `collection_id`.
+
+ Update:
+
+```
+def save_relationships(
+    self,
+    relationships: list[Relationship],
+):
+    rows = [
+        (
+            relationship.source_entity_type,
+            relationship.source_entity_id,
+            relationship.relationship_type,
+            relationship.target_entity_type,
+            relationship.target_entity_id,
+            relationship.timestamp.isoformat(),
+            relationship.collection_id,
+        )
+        for relationship in relationships
+    ]
+
+    self.conn.executemany(
+        """
+        INSERT INTO relationships (
+            source_entity_type,
+            source_entity_id,
+            relationship_type,
+            target_entity_type,
+            target_entity_id,
+            timestamp,
+            collection_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+
+    self.conn.commit()
+```
+
+ Then create:
+
+```
+def service_relationships(self, collection_id=None):
+
+    if collection_id is None:
+        collection_id = self.latest_collection_id()
+
+    if collection_id is None:
+        return []
+
+    cursor = self.conn.execute(
+        """
+        SELECT
+            source_entity_type,
+            source_entity_id,
+            relationship_type,
+            target_entity_type,
+            target_entity_id,
+            timestamp
+        FROM relationships
+        WHERE source_entity_type = ?
+        AND relationship_type = ?
+        AND collection_id = ?
+        ORDER BY source_entity_id ASC
+        """,
+        (
+            "service",
+            "manages",
+            collection_id,
+        ),
+    )
+
+    return cursor.fetchall()
+```
+
+ Now:
+
+```
+store.service_relationships()
+```
+
+ returns only the **current snapshot's** service → process relationships.
+
+---
+
+ # What the database now means
+
+ After a few Galaxy cycles:
+
+```
+collections
+
+A1
+14:00:00
+
+B2
+14:00:10
+
+C3
+14:00:20
+```
+
+ And:
+
+```
+observations
+
+service:nginx    A1
+service:docker   A1
+service:nginx    B2
+service:docker   B2
+service:nginx    C3
+service:docker   C3
+```
+
+ And:
+
+```
+relationships
+
+nginx → manages → pid:249@A    A1
+docker → manages → pid:624@A   A1
+
+nginx → manages → pid:249@A    B2
+docker → manages → pid:624@A   B2
+
+nginx → manages → pid:310@B    C3
+docker → manages → pid:624@A   C3
+```
+
+ Then:
+
+```
+store.current_services()
+```
+
+ means:
+
+```
+services from C3
+```
+
+ while:
+
+```
+store.services()
+```
+
+ means:
+
+```
+service history
+```
+
+ and:
+
+```
+store.service_relationships()
+```
+
+ means:
+
+```
+service relationships from C3
+```
+
+ That's the clean separation we were missing.
+
+---
+
+ ## One thing before you change all this
+
+ There's a fair amount of code here, and your existing database needs a migration. **I recommend doing this in two small steps rather than pasting everything at once.**
+
+ First, make the schema/model changes:
+
+```
+Observation.collection_id
+Relationship.collection_id
+observations.collection_id
+relationships.collection_id
+collections table
+```
+
+ Then we'll wire collection creation into `main.py` and test persistence.
+
+ **Don't modify `ProcessLifecycleTracker`.** It should continue exactly as it is. Its job is current in-memory lifecycle detection; `collection_id` is for persistent snapshot identity.
+ 
+ 
+ 
+ You're right to question it. **We don't need to add `collection_id` right now.** I jumped ahead architecturally.
+
+ For the current milestone, you already have enough.
+
+ ## What 13E actually needs right now
+
+ We have successfully established:
+
+```
+systemd
+   ↓
+ServiceCollector
+   ↓
+Observation
+   ↓
+SQLite
+```
+
+ and:
+
+```
+Service
+   ↓ manages
+Process
+```
+
+ The database already persists both:
+
+```
+observations
+relationships
+```
+
+ So the immediate goal should simply be:
+
+ > **Can Galaxy save service observations and service→process relationships, then retrieve them correctly?**
+
+ Yes.
+
+ We can test that with your existing schema.
+
+ ### Service observations
+
+ Your existing `save()` already accepts any `Observation`:
+
+```
+store.save(observations)
+```
+
+ It doesn't care whether:
+
+```
+entity_type = process
+```
+
+ or:
+
+```
+entity_type = service
+```
+
+ So services are already persisted.
+
+ ### Service relationships
+
+ Likewise, your existing:
+
+```
+store.save_relationships(relationships)
+```
+
+ already accepts:
+
+```
+service → manages → process
+```
+
+ because `Relationship` is generic.
+
+ So **don't change your models or SQLite schema yet.**
+
+---
+
+ # What we should do instead
+
+ Let's prove 13E with your existing database.
+
+ After running Galaxy:
+
+```
+python main.py
+```
+
+ use a small test:
+
+```
+from core.storage.sqlite_store import SQLiteStore
+
+store = SQLiteStore()
+
+# -------------------------
+# Services
+# -------------------------
+
+services = [
+    observation
+    for observation in store.all()
+    if observation.entity_type == "service"
+]
+
+print("Service observations:", len(services))
+
+for service in services[-10:]:
+    print(
+        service.entity_id,
+        service.data.get("active_state"),
+        service.data.get("main_pid"),
+    )
+
+# -------------------------
+# Service relationships
+# -------------------------
+
+relationships = [
+    relationship
+    for relationship in store.all_relationships()
+    if (
+        relationship[0] == "service"
+        and relationship[2] == "manages"
+    )
+]
+
+print()
+print("Service relationships:", len(relationships))
+
+for relationship in relationships[-10:]:
+    print(
+        relationship[1],
+        "->",
+        relationship[2],
+        "->",
+        relationship[4],
+    )
+```
+
+ You should get something like:
+
+```
+Service observations: 115
+```
+
+ and:
+
+```
+service:nginx
+active
+249
+
+service:docker
+active
+624
+```
+
+ Then:
+
+```
+Service relationships: 19
+
+service:containerd -> manages -> pid:280@...
+service:cron -> manages -> pid:167@...
+service:docker -> manages -> pid:624@...
+service:mysql -> manages -> pid:489@...
+service:nginx -> manages -> pid:249@...
+```
+
+ ## So what about the historical duplicates?
+
+ They're **not a bug**.
+
+ Your database is currently an observation history:
+
+```
+run 1 → nginx observation
+run 2 → nginx observation
+run 3 → nginx observation
+run 4 → nginx observation
+```
+
+ That's perfectly valid for the architecture we've built so far.
+
+ We don't yet need to solve:
+
+```
+"What exactly constitutes the current snapshot?"
+```
+
+ because that becomes important when we build more sophisticated historical/graph queries.
+
+ For now:
+
+```
+store.all()
+```
+
+ means:
+
+ > Give me all persisted observations.
+
+ And:
+
+```
+store.all_relationships()
+```
+
+ means:
+
+ > Give me all persisted relationships.
+
+ That's clear and useful.
+
+---
+
+ # Therefore, simplify 13E
+
+ Let's define it as:
+
+```
+13E — Persist and query services
+
+Service observations       ✅ already persisted
+Service relationships      ✅ already persisted
+Query service observations ✅ simple filtering
+Query relationships        ✅ existing API
+Historical duplicates      ✅ expected
+Snapshot identity          ⏸ later
+```
+
+ **Do not add `collection_id` yet.**
+
+ We'll revisit snapshot identity when Galaxy actually needs a concept of "current machine graph" versus "historical machine graph." That is a separate architectural problem, and introducing it now would add complexity without helping us finish 13E.
+
+ So the next step is simply to run the test above after `main.py` and confirm that the **19 service relationships are actually being written to SQLite**, not just generated in memory..

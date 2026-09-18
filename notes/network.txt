@@ -434,3 +434,913 @@ Port → a numbered endpoint/door.
 Listening → a server/application is waiting for incoming connections on that endpoint.
 
 Connection → a client has actually established communication with that server.
+
+
+
+
+Absolutely. Let's go deeper, but build it **from the ground up**. The goal is that when you see something like:
+
+```
+TCP:192.168.238.99:50918 → 185.15.59.224:443
+```
+
+ you can understand exactly what every part means and how the operating system knows it.
+
+ # 1\. First: what is a network?
+
+ A network is simply a way for computers to exchange data.
+
+ Imagine three computers:
+
+```
+Computer A        Computer B        Computer C
+     │                 │                 │
+     └─────────────────┼─────────────────┘
+                       │
+                    Network
+```
+
+ They need some way to identify each other.
+
+ That's where **IP addresses** come in.
+
+```
+Computer A → 192.168.1.10
+Computer B → 192.168.1.20
+Computer C → 192.168.1.30
+```
+
+ Now Computer A can say:
+
+ > Send this data to `192.168.1.20`.
+
+---
+
+ # 2\. An IP address identifies a network endpoint
+
+ Think of an IP address somewhat like a street address.
+
+ For example:
+
+```
+192.168.1.20
+```
+
+ identifies a machine/interface on a network.
+
+ But there's a problem.
+
+ Suppose Computer B is running:
+
+```
+Web server
+SSH server
+Database
+Game server
+```
+
+ If Computer A sends data to:
+
+```
+192.168.1.20
+```
+
+ how does Computer B know **which application** should receive it?
+
+ That's what **ports** solve.
+
+---
+
+ # 3\. IP + port
+
+ A port identifies a particular network service/application on a machine.
+
+ So:
+
+```
+192.168.1.20:443
+```
+
+ means roughly:
+
+```
+Machine: 192.168.1.20
+Port:       443
+```
+
+ You can think of it like:
+
+```
+IP address = building
+Port       = apartment
+```
+
+ So:
+
+```
+192.168.1.20:443
+```
+
+ means:
+
+ > Apartment 443 in building 192.168.1.20.
+
+ Of course, that's only an analogy, but it's useful.
+
+---
+
+ # 4\. Why do we need two IP addresses in a connection?
+
+ Suppose your browser connects to a web server.
+
+ Your computer:
+
+```
+192.168.1.10
+```
+
+ The web server:
+
+```
+93.184.216.34
+```
+
+ Your browser might create:
+
+```
+192.168.1.10:51234 → 93.184.216.34:443
+```
+
+ There are two endpoints:
+
+```
+LOCAL                         REMOTE
+
+192.168.1.10:51234  ───────→  93.184.216.34:443
+```
+
+ The left side is the **local endpoint**.
+
+ The right side is the **remote endpoint**.
+
+---
+
+ # 5\. What is a socket?
+
+ This is an important concept.
+
+ A **socket** is an operating-system object representing a network communication endpoint.
+
+ For a TCP connection, you can conceptually think of it as:
+
+```
+Local IP
+Local port
+Remote IP
+Remote port
+Protocol
+```
+
+ For example:
+
+```
+TCP
+Local IP:     192.168.1.10
+Local port:   51234
+
+Remote IP:    93.184.216.34
+Remote port:  443
+```
+
+ Together:
+
+```
+TCP
+192.168.1.10:51234
+        ↓
+93.184.216.34:443
+```
+
+ The operating system keeps track of this.
+
+---
+
+ # 6\. Where does the process come into this?
+
+ Now we add your original question.
+
+ Suppose Chrome creates a TCP connection.
+
+ The OS might internally have something like:
+
+```
+Process 502
+     │
+     │ owns socket
+     ↓
+TCP socket
+     │
+     ├── Local: 192.168.1.10:51234
+     │
+     └── Remote: 93.184.216.34:443
+```
+
+ Therefore your monitoring system can represent:
+
+```
+process 502
+     │
+     │ has_connection
+     ↓
+192.168.1.10:51234 → 93.184.216.34:443
+```
+
+ **This is what "process identity resolution" means in your original example.**
+
+ The OS knows:
+
+ > Process 502 has this socket.
+
+ And the socket tells you:
+
+ > This connection goes from this local endpoint to this remote endpoint.
+
+---
+
+ # 7\. Now let's talk about "local"
+
+ This is where things get confusing.
+
+ **Local does not mean "starts with 127."**
+
+ It means:
+
+ > This endpoint belongs to the machine we're talking about.
+
+ Suppose your computer has:
+
+```
+127.0.0.1
+192.168.1.10
+10.0.0.5
+```
+
+ All three can belong to the same computer.
+
+ Therefore:
+
+```
+127.0.0.1
+192.168.1.10
+10.0.0.5
+```
+
+ can all be **local addresses**.
+
+---
+
+ # 8\. Why does one computer have multiple IP addresses?
+
+ Because a computer can have multiple network interfaces.
+
+ For example:
+
+```
+                 YOUR COMPUTER
+              ┌─────────────────┐
+              │                 │
+              │ Wi-Fi           │
+              │ 192.168.1.10    │
+              │                 │
+              │ Ethernet        │
+              │ 10.0.0.5        │
+              │                 │
+              │ Loopback        │
+              │ 127.0.0.1       │
+              │                 │
+              └─────────────────┘
+```
+
+ A laptop might have:
+
+ - Wi-Fi
+- Ethernet
+- VPN interface
+- Docker interface
+- virtual machine interface
+- loopback interface
+
+ Each interface can have its own IP address.
+
+ So one machine can have many IP addresses.
+
+---
+
+ # 9\. `127.0.0.1` is special
+
+ `127.0.0.1` means:
+
+ > **This machine itself.**
+
+ It's called the **loopback address**.
+
+ Imagine:
+
+```
+Application A
+     │
+     │ 127.0.0.1
+     ↓
+Operating system
+     │
+     │
+     ↓
+Application B
+```
+
+ The traffic doesn't need to go to another machine.
+
+ For example:
+
+```
+127.0.0.1:6379 → 127.0.0.1:39216
+```
+
+ means two applications on the same machine are communicating.
+
+ That's why your Redis example is local-to-local.
+
+---
+
+ # 10\. What is `192.168.x.x`?
+
+ That's a **private IPv4 address range**.
+
+ There are three major private IPv4 ranges:
+
+```
+10.0.0.0/8
+
+172.16.0.0/12
+
+192.168.0.0/16
+```
+
+ You will frequently see:
+
+```
+192.168.1.10
+192.168.1.20
+10.0.0.5
+10.20.30.40
+172.16.0.10
+```
+
+ These are commonly used inside private networks.
+
+ For example:
+
+```
+              HOME NETWORK
+
+                  Router
+                    │
+          ┌─────────┼─────────┐
+          │         │         │
+       Laptop     Phone     Server
+     192.168.1.10 .20       .30
+```
+
+ The devices can communicate with each other using these addresses.
+
+---
+
+ # 11\. But private doesn't mean local
+
+ This is **extremely important**.
+
+ Suppose your computer is:
+
+```
+192.168.1.10
+```
+
+ and another computer is:
+
+```
+192.168.1.20
+```
+
+ Both are private.
+
+ But:
+
+```
+192.168.1.10 = local to your computer
+192.168.1.20 = remote from your computer
+```
+
+ So:
+
+```
+192.168.1.10 → 192.168.1.20
+```
+
+ is:
+
+```
+LOCAL COMPUTER → REMOTE COMPUTER
+```
+
+ even though both addresses are private.
+
+ Therefore:
+
+ > **Private ≠ local**
+
+ and:
+
+ > **Public ≠ automatically remote in every conceptual context**
+
+ The important question is whether the address belongs to **this host**.
+
+---
+
+ # 12\. What is a public IP?
+
+ Public addresses are addresses that can be used for communication across the Internet.
+
+ For example:
+
+```
+93.184.216.34
+```
+
+ A server on the Internet might have that address.
+
+ Your computer might connect:
+
+```
+192.168.1.10:51234
+        │
+        │
+        ↓
+93.184.216.34:443
+```
+
+ Your local endpoint:
+
+```
+192.168.1.10:51234
+```
+
+ Remote endpoint:
+
+```
+93.184.216.34:443
+```
+
+---
+
+ # 13\. Then comes NAT
+
+ This is another important networking concept.
+
+ Your laptop may have:
+
+```
+192.168.1.10
+```
+
+ But `192.168.1.10` isn't normally directly routable across the Internet.
+
+ Your router might have a public IP:
+
+```
+203.0.113.50
+```
+
+ So you get something conceptually like:
+
+```
+LAPTOP                 ROUTER                 INTERNET
+
+192.168.1.10 ───────→ 203.0.113.50 ───────→ Web Server
+```
+
+ The router performs **NAT (Network Address Translation)**.
+
+ It translates connections between your private network and the public Internet.
+
+ This is why your computer can use:
+
+```
+192.168.1.10
+```
+
+ while Internet servers don't directly use that address to reach your laptop.
+
+---
+
+ # 14\. What does the port do during NAT?
+
+ Suppose your browser creates:
+
+```
+192.168.1.10:51234 → 93.184.216.34:443
+```
+
+ The router might translate it to something like:
+
+```
+203.0.113.50:40001 → 93.184.216.34:443
+```
+
+ Conceptually:
+
+```
+Laptop
+192.168.1.10:51234
+       │
+       ↓
+Router/NAT
+203.0.113.50:40001
+       │
+       ↓
+Internet server
+93.184.216.34:443
+```
+
+ The router remembers the mapping so that replies can come back to the correct laptop.
+
+---
+
+ # 15\. What is a listening port?
+
+ Now let's distinguish a **connection** from a **listening socket**.
+
+ Suppose you run a web server.
+
+ It might listen on:
+
+```
+0.0.0.0:8080
+```
+
+ This means roughly:
+
+ > Listen for incoming connections on port 8080 across the machine's IPv4 interfaces.
+
+ Then another computer connects:
+
+```
+Other computer
+192.168.1.20:55000
+       │
+       ↓
+Your server
+192.168.1.10:8080
+```
+
+ The server was **listening** on port 8080.
+
+ After the connection is established, you have an actual connection:
+
+```
+192.168.1.10:8080
+        ↕
+192.168.1.20:55000
+```
+
+ This distinction is important for your data model.
+
+---
+
+ # 16\. `0.0.0.0` is not really a normal destination
+
+ If you see:
+
+```
+0.0.0.0:8080
+```
+
+ in a list of listening sockets, it usually means:
+
+```
+Listen on all IPv4 interfaces
+```
+
+ Imagine your computer has:
+
+```
+127.0.0.1
+192.168.1.10
+10.0.0.5
+```
+
+ Then:
+
+```
+0.0.0.0:8080
+```
+
+ roughly means:
+
+```
+127.0.0.1:8080
+192.168.1.10:8080
+10.0.0.5:8080
+```
+
+ for listening purposes.
+
+ So don't treat `0.0.0.0` as:
+
+ > "The process is connected to computer 0.0.0.0."
+
+ It isn't.
+
+---
+
+ # 17\. Now let's return to your original examples
+
+ You had:
+
+```
+pid:502@1789378328.95
+    │
+    │ has_connection
+    ↓
+TCP:192.168.238.99:50918-185.15.59.224:443
+```
+
+ Let's decode it.
+
+ ### Process
+
+```
+pid:502
+```
+
+ Process ID 502.
+
+ ### Protocol
+
+```
+TCP
+```
+
+ The connection uses TCP.
+
+ ### Local endpoint
+
+```
+192.168.238.99:50918
+```
+
+ Your machine's IP:
+
+```
+192.168.238.99
+```
+
+ Local port:
+
+```
+50918
+```
+
+ ### Remote endpoint
+
+```
+185.15.59.224:443
+```
+
+ Remote machine:
+
+```
+185.15.59.224
+```
+
+ Remote service:
+
+```
+443
+```
+
+ So visually:
+
+```
+                  TCP CONNECTION
+
+YOUR MACHINE                         REMOTE MACHINE
+┌───────────────┐                    ┌───────────────┐
+│ Process 502   │                    │               │
+│       │       │                    │               │
+│       ▼       │                    │               │
+│ :50918        │ ─────────────────→ │ :443          │
+│ 192.168.238.99│                    │185.15.59.224  │
+└───────────────┘                    └───────────────┘
+       LOCAL                              REMOTE
+```
+
+ That's the whole thing.
+
+---
+
+ # 18\. Your second example
+
+```
+pid:194
+   │
+   │ has_connection
+   ↓
+TCP:127.0.0.1:6379-127.0.0.1:39216
+```
+
+ Now:
+
+```
+YOUR COMPUTER
+┌───────────────────────────────┐
+│                               │
+│ Process A                     │
+│    │                          │
+│    │ :6379                    │
+│    ↓                          │
+│ 127.0.0.1                     │
+│    ↕                          │
+│ 127.0.0.1                     │
+│    ↑                          │
+│    │ :39216                   │
+│ Process B                     │
+│                               │
+└───────────────────────────────┘
+```
+
+ Both sides are on the same machine.
+
+ So:
+
+```
+local → local
+```
+
+---
+
+ # 19\. TCP doesn't really think "local" and "remote"
+
+ This is a subtle but important point.
+
+ TCP itself primarily deals with endpoints.
+
+ You can think of a TCP connection as:
+
+```
+(protocol,
+ local IP,
+ local port,
+ remote IP,
+ remote port)
+```
+
+ The operating system gives meaning to "local" and "remote" from its perspective.
+
+ For your monitoring system:
+
+```
+local endpoint = endpoint belonging to this host
+remote endpoint = the other endpoint
+```
+
+---
+
+ # 20\. Why can the same port appear on different processes?
+
+ Because the full identity isn't just the port.
+
+ For example:
+
+```
+Process A:
+192.168.1.10:5000 → 93.184.216.34:443
+
+Process B:
+192.168.1.10:5001 → 93.184.216.34:443
+```
+
+ Both can connect to remote port `443`.
+
+ That's perfectly normal.
+
+ And a server can have:
+
+```
+192.168.1.10:443
+```
+
+ with many clients:
+
+```
+192.168.1.20:50001 → 192.168.1.10:443
+192.168.1.30:50002 → 192.168.1.10:443
+192.168.1.40:50003 → 192.168.1.10:443
+```
+
+ The server uses the combination of addresses and ports to distinguish connections.
+
+---
+
+ # 21\. The five things I would memorize
+
+ If you're learning networking, don't try to memorize every IP range yet.
+
+ Understand these five things:
+
+ ### 1\. IP address
+
+ **Which network interface/machine?**
+
+```
+192.168.1.10
+```
+
+ ### 2\. Port
+
+ **Which application/service?**
+
+```
+:443
+```
+
+ ### 3\. Socket
+
+ **An endpoint used by an application for networking.**
+
+```
+192.168.1.10:50000
+```
+
+ ### 4\. Connection
+
+ **Two endpoints communicating.**
+
+```
+192.168.1.10:50000
+        ↕
+93.184.216.34:443
+```
+
+ ### 5\. Process
+
+ **The program using the socket.**
+
+```
+Chrome
+  │
+  ↓
+socket
+  │
+  ↓
+192.168.1.10:50000 → 93.184.216.34:443
+```
+
+ That gives you the relationship:
+
+```
+PROCESS
+   │
+   │ owns/uses
+   ↓
+SOCKET
+   │
+   │ participates in
+   ↓
+CONNECTION
+   │
+   ├── LOCAL ENDPOINT
+   │       IP + PORT
+   │
+   └── REMOTE ENDPOINT
+           IP + PORT
+```
+
+ And **this is exactly why your original data is valuable**:
+
+```
+process
+   │
+   │ has_connection
+   ↓
+TCP connection
+   │
+   ├── local:  192.168.238.99:50918
+   │
+   └── remote: 185.15.59.224:443
+```
+
+ You're essentially building a graph that answers:
+
+ > **"Which program on my machine is communicating with which machine, on which port, using which protocol?"**
+
+ That's the core networking concept behind the data you're looking at.

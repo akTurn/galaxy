@@ -40,3 +40,18 @@ print("Cycle 2")
 print("Started:", result["started"])
 print("Running:", result["running"])
 print("Exited:", result["exited"])
+
+
+cycle_3 = [
+    FakeObservation("pid:1@A"),
+    FakeObservation("pid:3@C"),
+    FakeObservation("pid:2@NEW"),
+]
+
+result = tracker.update(cycle_3)
+
+print()
+print("Cycle 3")
+print("Started:", result["started"])
+print("Running:", result["running"])
+print("Exited:", result["exited"])

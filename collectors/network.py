@@ -103,7 +103,7 @@ class NetworkCollector:
 
             address = connection.laddr.ip
             port = connection.laddr.port
-           # pid = connection.pid
+            pid = connection.pid
 
             if connection.type == socket.SOCK_STREAM:
                 protocol = "TCP"
@@ -118,7 +118,7 @@ class NetworkCollector:
                 "protocol": protocol,
                 "local_address": address,
                 "local_port": port,
-                #"pid": pid,
+                "pid": pid,
                 "status": connection.status,
             }
 
@@ -167,6 +167,7 @@ class NetworkCollector:
                 "remote_address": remote_address,
                 "remote_port": remote_port,
                 "state": connection.status,
+                "pid": connection.pid,
             }
 
             observation = Observation(

@@ -1,0 +1,2013 @@
+Yes — this is the right place to build **12F**, and your existing `ProcessTree` gives us the pattern to follow.
+
+ I would **not modify `ProcessTree` or `ProcessLifecycleTracker` yet**. Instead, create a network graph/query layer alongside them.
+
+ Your existing process tree does:
+
+```
+entity_id
+   ↓
+store.get_children()
+   ↓
+relationship rows
+   ↓
+child entity IDs
+   ↓
+recursive traversal
+```
+
+ 12F can use exactly the same philosophy.
+
+ ## 12F structure
+
+ I'd create:
+
+```
+core/graph/network_graph.py
+```
+
+ with three responsibilities:
+
+```
+NetworkGraph
+│
+├── get_process_connections()
+├── get_endpoint_processes()
+└── traversal
+```
+
+ ### 1\. Get connections for a process
+
+```
+from core.storage.sqlite_store import SQLiteStore
+
+class NetworkGraph:
+
+    def __init__(self, store: SQLiteStore):
+        self.store = store
+
+    def get_process_connections(self, process_entity_id):
+
+        relationships = self.store.all_relationships()
+
+        return [
+            relationship
+            for relationship in relationships
+            if (
+                relationship[1] == process_entity_id
+                and relationship[2] == "has_connection"
+            )
+        ]
+```
+
+ Then:
+
+```
+connections = graph.get_process_connections(
+    "pid:1625@1789378375.83"
+)
+
+for connection in connections:
+    print(connection)
+```
+
+ This gives:
+
+```
+process
+   │
+   └── has_connection
+             ↓
+      network_connection
+```
+
+---
+
+ # 2\. Get processes connected to an endpoint
+
+ This is the reverse query.
+
+ Suppose the endpoint is:
+
+```
+TCP:127.0.0.1:44281-127.0.0.1:52806
+```
+
+ You want:
+
+```
+network_connection
+        ↑
+        │ has_connection
+        │
+     process
+```
+
+ Add:
+
+```
+def get_processes_for_connection(
+    self,
+    connection_entity_id,
+):
+
+    relationships = self.store.all_relationships()
+
+    return [
+        relationship
+        for relationship in relationships
+        if (
+            relationship[2] == "has_connection"
+            and relationship[4] == connection_entity_id
+        )
+    ]
+```
+
+ Usage:
+
+```
+processes = graph.get_processes_for_connection(
+    "TCP:127.0.0.1:52810-127.0.0.1:44281"
+)
+
+for process in processes:
+    print(process)
+```
+
+---
+
+ # 3\. Better: query by endpoint
+
+ I would actually make this slightly more useful.
+
+ A `network_connection` entity ID currently contains:
+
+```
+TCP:local_address:local_port-remote_address:remote_port
+```
+
+ But users shouldn't have to construct that string manually.
+
+ So add:
+
+```
+def get_connections_to_endpoint(
+    self,
+    remote_address,
+    remote_port,
+):
+
+    observations = self.store.all()
+
+    return [
+        observation
+        for observation in observations
+        if (
+            observation.entity_type == "network_connection"
+            and observation.data.get("remote_address") == remote_address
+            and observation.data.get("remote_port") == remote_port
+        )
+    ]
+```
+
+ For example:
+
+```
+graph.get_connections_to_endpoint(
+    "185.15.59.224",
+    443,
+)
+```
+
+ That gives you the network connections going to that endpoint.
+
+ Then you can resolve the owning processes through the `has_connection` relationships.
+
+---
+
+ # 4\. Begin graph traversal
+
+ This is where your `ProcessTree` pattern becomes useful.
+
+ Your process tree is essentially:
+
+```
+process
+  │
+  └── parent_of
+        │
+        └── process
+              │
+              └── parent_of
+```
+
+ Network traversal is broader:
+
+```
+process
+   │
+   ├── parent_of ──> process
+   │
+   ├── listens_on ──> listening_port
+   │
+   └── has_connection ──> network_connection
+```
+
+ So instead of hard-coding only `get_children()`, I'd introduce a generic graph method.
+
+ Something like:
+
+```
+class NetworkGraph:
+
+    def __init__(self, store):
+        self.store = store
+
+    def get_relationships_from(
+        self,
+        entity_id,
+        relationship_type=None,
+    ):
+
+        relationships = self.store.all_relationships()
+
+        results = [
+            relationship
+            for relationship in relationships
+            if relationship[1] == entity_id
+        ]
+
+        if relationship_type is not None:
+
+            results = [
+                relationship
+                for relationship in results
+                if relationship[2] == relationship_type
+            ]
+
+        return results
+```
+
+ Now:
+
+```
+graph.get_relationships_from(
+    "pid:1625@1789378375.83"
+)
+```
+
+ returns everything connected **outward** from that process.
+
+ And:
+
+```
+graph.get_relationships_from(
+    "pid:1625@1789378375.83",
+    "has_connection",
+)
+```
+
+ returns only its network connections.
+
+---
+
+ # 5\. Then build a generic one-hop graph
+
+ This is the next abstraction I'd introduce:
+
+```
+def get_neighbors(self, entity_id):
+
+    relationships = self.store.all_relationships()
+
+    neighbors = []
+
+    for relationship in relationships:
+
+        source_id = relationship[1]
+        target_id = relationship[4]
+
+        if source_id == entity_id:
+            neighbors.append({
+                "direction": "out",
+                "relationship": relationship[2],
+                "entity_id": target_id,
+            })
+
+        elif target_id == entity_id:
+            neighbors.append({
+                "direction": "in",
+                "relationship": relationship[2],
+                "entity_id": source_id,
+            })
+
+    return neighbors
+```
+
+ Now Galaxy can ask:
+
+```
+graph.get_neighbors(
+    "pid:1625@1789378375.83"
+)
+```
+
+ and potentially get:
+
+```
+OUT  listens_on
+     → TCP:127.0.0.1:44281
+
+OUT  has_connection
+     → TCP:127.0.0.1:44281-127.0.0.1:52806
+
+OUT  has_connection
+     → TCP:127.0.0.1:44281-127.0.0.1:52810
+
+IN   parent_of
+     → pid:1621@...
+```
+
+ That is much more powerful than a process-specific query.
+
+---
+
+ # 6\. Then recursive traversal
+
+ Once `get_neighbors()` works, we can implement:
+
+```
+def traverse(self, root_entity_id, max_depth=3):
+
+    visited = set()
+
+    def walk(entity_id, depth):
+
+        if depth > max_depth:
+            return None
+
+        if entity_id in visited:
+            return None
+
+        visited.add(entity_id)
+
+        node = {
+            "entity_id": entity_id,
+            "neighbors": []
+        }
+
+        for neighbor in self.get_neighbors(entity_id):
+
+            child = walk(
+                neighbor["entity_id"],
+                depth + 1
+            )
+
+            if child is not None:
+
+                node["neighbors"].append({
+                    "relationship": neighbor["relationship"],
+                    "direction": neighbor["direction"],
+                    "node": child,
+                })
+
+        return node
+
+    return walk(root_entity_id, 0)
+```
+
+ The `visited` set is important.
+
+ Without it, once you start mixing:
+
+```
+parent_of
+listens_on
+has_connection
+```
+
+ you can encounter cycles and repeatedly traverse the same entity.
+
+---
+
+ # 7\. Your resulting graph becomes
+
+ For PID `1625`, conceptually:
+
+```
+pid:1625
+   │
+   ├── parent_of
+   │      ↓
+   │   pid:1621
+   │
+   ├── listens_on
+   │      ↓
+   │   TCP:127.0.0.1:44281
+   │
+   └── has_connection
+          ↓
+   TCP:127.0.0.1:44281-127.0.0.1:52806
+```
+
+ And another process:
+
+```
+pid:1648
+   │
+   └── has_connection
+          ↓
+   TCP:127.0.0.1:52810-127.0.0.1:44281
+```
+
+ So Galaxy can eventually reason:
+
+```
+Process A
+   ↓
+listens_on
+   ↓
+Port 44281
+   ↑
+   │ network connection
+   │
+Process B
+```
+
+ That's the beginning of an actual **graph traversal engine**.
+
+ ## One change I'd make to your existing `ProcessTree`
+
+ Eventually, `ProcessTree` should probably use the generic graph functionality rather than independently implementing graph traversal.
+
+ But **don't refactor it yet**.
+
+ Get this working first:
+
+```
+12F.1  get_process_connections       ← first
+12F.2  get_processes_for_connection
+12F.3  get_neighbors
+12F.4  traverse
+12F.5  test traversal
+```
+
+ Then we can refactor `ProcessTree` to become a specialized view over the generic graph.
+
+ That gives you a clean architecture:
+
+```
+                  Graph
+                   │
+        ┌──────────┼──────────┐
+        ↓          ↓          ↓
+   ProcessTree  NetworkGraph  ...
+        │          │
+        ↓          ↓
+     process     network
+      view        view
+```
+
+ **So I would implement `NetworkGraph.get_process_connections()` first and test it against PID `1625`, because your database already contains exactly the data needed to verify it.**
+
+
+
+ Absolutely. Your `NetworkGraph` is now acting as a **query and traversal layer over the relationships stored in SQLite**.
+
+ The important idea is:
+
+```
+SQLite relationships
+        ↓
+   NetworkGraph
+        ↓
+   query / navigate
+        ↓
+Processes / Ports / Connections
+```
+
+ Your graph does **not create relationships**. The collectors and relationship functions create them. `NetworkGraph` lets you explore what already exists.
+
+---
+
+ # 1\. What your database contains
+
+ Your `all_relationships()` is returning tuples like:
+
+```
+(
+    'process',
+    'pid:1625@1789378375.83',
+    'listens_on',
+    'listening_port',
+    'TCP:127.0.0.1:44281',
+    '2026-09-14T10:51:55.968959+00:00'
+)
+```
+
+ The positions mean:
+
+```
+[0] source_entity_type
+[1] source_entity_id
+[2] relationship_type
+[3] target_entity_type
+[4] target_entity_id
+[5] timestamp
+```
+
+ So this:
+
+```
+process
+   │
+   │ listens_on
+   ↓
+listening_port
+```
+
+ is represented as:
+
+```
+source = pid:1625...
+relationship = listens_on
+target = TCP:127.0.0.1:44281
+```
+
+ That's the foundation of everything your `NetworkGraph` does.
+
+---
+
+ # 2\. `get_relationships_from()`
+
+ You have:
+
+```
+def get_relationships_from(
+    self,
+    entity_id,
+    relationship_type=None,
+):
+```
+
+ This asks:
+
+ > "Show me all relationships originating from this entity."
+
+ First:
+
+```
+relationships = self.store.all_relationships()
+```
+
+ You load all relationships from SQLite.
+
+ Then:
+
+```
+results = [
+    relationship
+    for relationship in relationships
+    if relationship[1] == entity_id
+]
+```
+
+ You're checking:
+
+```
+relationship[1]
+```
+
+ which is the source entity ID.
+
+ For example:
+
+```
+pid:1625
+    ↓
+listens_on
+    ↓
+TCP:127.0.0.1:44281
+```
+
+ will match:
+
+```
+relationship[1] == "pid:1625..."
+```
+
+ Then you optionally filter by relationship type:
+
+```
+if relationship_type is not None:
+```
+
+ For example:
+
+```
+graph.get_relationships_from(
+    "pid:1625@1789378375.83",
+    "listens_on"
+)
+```
+
+ means:
+
+ > Give me relationships originating from this process, but only `listens_on`.
+
+---
+
+ # 3\. `get_process_connections()`
+
+ This is a higher-level query.
+
+```
+def get_process_connections(self, process_entity_id):
+
+    return [
+        neighbor
+        for neighbor in self.get_neighbors(process_entity_id)
+        if neighbor["direction"] == "out"
+        and neighbor["relationship"] == "has_connection"
+    ]
+```
+
+ Instead of manually looking through database tuples, you use:
+
+```
+self.get_neighbors(process_entity_id)
+```
+
+ Suppose the database contains:
+
+```
+process A
+   │
+   │ has_connection
+   ↓
+connection X
+```
+
+ `get_neighbors()` turns that into:
+
+```
+{
+    "direction": "out",
+    "relationship": "has_connection",
+    "entity_id": "connection X"
+}
+```
+
+ Then this:
+
+```
+neighbor["direction"] == "out"
+```
+
+ makes sure the process is the **source**.
+
+ And:
+
+```
+neighbor["relationship"] == "has_connection"
+```
+
+ makes sure we're only interested in network connections.
+
+ So:
+
+```
+get_process_connections(...)
+```
+
+ basically means:
+
+ > "Which network connections does this process own?"
+
+---
+
+ # 4\. `get_connection_processes()`
+
+ This does the opposite query.
+
+```
+def get_connection_processes(self, connection_entity_id):
+```
+
+ You give it:
+
+```
+TCP:127.0.0.1:44281-127.0.0.1:52806
+```
+
+ and it searches for:
+
+```
+process
+   │
+   │ has_connection
+   ↓
+that connection
+```
+
+ This part:
+
+```
+target_id = relationship[4]
+```
+
+ gets the target.
+
+ Then:
+
+```
+if (
+    target_id == connection_entity_id
+    and relationship_type == "has_connection"
+):
+```
+
+ means:
+
+ > Find relationships whose target is this connection and whose relationship is `has_connection`.
+
+ Then:
+
+```
+results.append(source_id)
+```
+
+ adds the process.
+
+ So:
+
+```
+graph.get_connection_processes(connection)
+```
+
+ answers:
+
+ > "Which processes have this network connection?"
+
+---
+
+ # 5\. `get_port_processes()`
+
+ Same idea, but for listening ports.
+
+ You want to answer:
+
+ > "Which process is listening on this port?"
+
+ Suppose you have:
+
+```
+process
+   │
+   │ listens_on
+   ↓
+TCP:127.0.0.1:44281
+```
+
+ You call:
+
+```
+graph.get_port_processes(
+    "TCP:127.0.0.1:44281"
+)
+```
+
+ The method looks for:
+
+```
+target_id == port_entity_id
+```
+
+ and:
+
+```
+relationship_type == "listens_on"
+```
+
+ Then returns:
+
+```
+[
+    "pid:1625@1789378375.83"
+]
+```
+
+ So now Galaxy can answer:
+
+```
+Who owns this port?
+```
+
+---
+
+ # 6\. `get_neighbors()` is the core graph operation
+
+ This is probably the most important method in the class.
+
+```
+def get_neighbors(
+    self,
+    entity_id,
+    relationships=None,
+):
+```
+
+ It asks:
+
+ > "What entities are directly connected to this entity?"
+
+ It can find connections in **both directions**.
+
+ You first get relationships:
+
+```
+if relationships is None:
+    relationships = self.store.all_relationships()
+```
+
+ The optional `relationships` parameter is useful because `traverse()` can eventually pass the already-loaded relationship list instead of hitting SQLite repeatedly.
+
+ Then:
+
+```
+for relationship in relationships:
+```
+
+ you inspect every relationship.
+
+ You extract:
+
+```
+source_id = relationship[1]
+target_id = relationship[4]
+```
+
+ Then there are two possibilities.
+
+ ### Outgoing relationship
+
+ If:
+
+```
+source_id == entity_id
+```
+
+ you produce:
+
+```
+{
+    "direction": "out",
+    "relationship": relationship[2],
+    "entity_id": target_id,
+}
+```
+
+ For:
+
+```
+process
+   │
+   │ listens_on
+   ↓
+port
+```
+
+ you get:
+
+```
+{
+    "direction": "out",
+    "relationship": "listens_on",
+    "entity_id": "TCP:127.0.0.1:44281"
+}
+```
+
+ ### Incoming relationship
+
+ If:
+
+```
+target_id == entity_id
+```
+
+ you produce:
+
+```
+{
+    "direction": "in",
+    "relationship": relationship[2],
+    "entity_id": source_id,
+}
+```
+
+ For:
+
+```
+parent
+   │
+   │ parent_of
+   ↓
+process
+```
+
+ when you're standing on the child process, you'll see:
+
+```
+{
+    "direction": "in",
+    "relationship": "parent_of",
+    "entity_id": "parent-process"
+}
+```
+
+ That's why your earlier output contained:
+
+```
+'in', 'parent_of', 'pid:1621...'
+```
+
+ and:
+
+```
+'out', 'parent_of', 'pid:1668...'
+```
+
+ Your graph can walk **up and down** the process tree.
+
+---
+
+ # 7\. `traverse()` is where it becomes a graph
+
+ This is the most interesting part.
+
+ You call:
+
+```
+graph.traverse(
+    "pid:1625@1789378375.83",
+    max_depth=3
+)
+```
+
+ You're saying:
+
+ > Start at this entity and explore the graph up to 3 edges away.
+
+ You create:
+
+```
+visited = set()
+```
+
+ This is extremely important.
+
+ Without it, a graph containing cycles could cause infinite recursion.
+
+ For example:
+
+```
+A → B
+B → C
+C → A
+```
+
+ Without `visited`, you'd get:
+
+```
+A
+ └─ B
+     └─ C
+         └─ A
+             └─ B
+                 └─ C
+                     ...
+```
+
+ Your:
+
+```
+if entity_id in visited:
+    return None
+```
+
+ prevents that.
+
+---
+
+ # 8\. `walk()` recursively explores the graph
+
+ You define:
+
+```
+def walk(entity_id, depth):
+```
+
+ This is a recursive function.
+
+ It starts at:
+
+```
+depth = 0
+```
+
+ Then each neighbor becomes:
+
+```
+depth + 1
+```
+
+ So:
+
+```
+root
+ ↓ depth 0
+
+neighbor
+ ↓ depth 1
+
+neighbor
+ ↓ depth 2
+
+neighbor
+ ↓ depth 3
+```
+
+ Once:
+
+```
+if depth > max_depth:
+```
+
+ becomes true, traversal stops.
+
+---
+
+ # 9\. Each node becomes a dictionary
+
+ For every entity:
+
+```
+node = {
+    "entity_id": entity_id,
+    "neighbors": []
+}
+```
+
+ So your process:
+
+```
+pid:1625...
+```
+
+ might become:
+
+```
+{
+    "entity_id": "pid:1625...",
+    "neighbors": [...]
+}
+```
+
+ Then every relationship gets represented as:
+
+```
+{
+    "relationship": "listens_on",
+    "direction": "out",
+    "node": {...}
+}
+```
+
+ So the graph becomes a nested Python structure.
+
+---
+
+ # 10\. Your actual traversal result
+
+ Your result:
+
+```
+pid:1625
+```
+
+ has:
+
+```
+parent_of → pid:1621
+parent_of → pid:1668
+parent_of → pid:1685
+parent_of → pid:1696
+listens_on → TCP:127.0.0.1:44281
+has_connection → TCP:127.0.0.1:44281-127.0.0.1:52806
+```
+
+ Then it follows those nodes.
+
+ For example:
+
+```
+pid:1625
+    │
+    ├── parent_of → pid:1696
+    │                  │
+    │                  ├── parent_of → pid:1754
+    │                  │
+    │                  ├── has_connection → connection
+    │                  │
+    │                  └── has_connection → remote connection
+    │
+    ├── listens_on → port
+    │
+    └── has_connection → connection
+```
+
+ That's a real graph traversal.
+
+---
+
+ # 11\. Why this is important for Galaxy
+
+ You've now separated three responsibilities nicely:
+
+```
+Collectors
+    ↓
+Observations
+    ↓
+Relationship builders
+    ↓
+Relationships
+    ↓
+SQLite
+    ↓
+NetworkGraph
+    ↓
+Queries / traversal
+```
+
+ So the graph layer doesn't care **how** you discovered the relationship.
+
+ It only cares:
+
+```
+source
+relationship
+target
+```
+
+ That is exactly the abstraction you want.
+
+---
+
+ # One improvement I recommend now
+
+ Your `traverse()` currently does this:
+
+```
+for neighbor in self.get_neighbors(entity_id):
+```
+
+ That means every recursive call can potentially execute:
+
+```
+self.store.all_relationships()
+```
+
+ again.
+
+ You already added this capability:
+
+```
+relationships=None
+```
+
+ So take advantage of it.
+
+ Change:
+
+```
+def traverse(self, root_entity_id, max_depth=3):
+
+    visited = set()
+```
+
+ to:
+
+```
+def traverse(self, root_entity_id, max_depth=3):
+
+    relationships = self.store.all_relationships()
+
+    visited = set()
+```
+
+ Then:
+
+```
+for neighbor in self.get_neighbors(
+    entity_id,
+    relationships,
+):
+```
+
+ Now SQLite is queried **once** for the entire traversal rather than once per node.
+
+ That gives you:
+
+```
+SQLite
+   │
+   │ load once
+   ↓
+relationships
+   │
+   ↓
+traverse
+   ├── node
+   ├── node
+   ├── node
+   └── node
+```
+
+ rather than:
+
+```
+node
+ ↓
+SQLite
+
+node
+ ↓
+SQLite
+
+node
+ ↓
+SQLite
+
+node
+ ↓
+SQLite
+```
+
+ That is the next small improvement I'd make before moving on.
+
+ And conceptually, **12F is now complete**: Galaxy has persistent relationships, direct graph queries, neighbor discovery, and recursive traversal.
+
+
+ Yes. If **Milestones 1–12 are finished**, then we should move to **Milestone 13 — Service Intelligence**.
+
+Your current `Orchestrator` is already in a good position for this. **Do not redesign it yet.** We will add service observation and then connect:
+
+```text
+Service
+   ↓
+runs_as / managed_by
+   ↓
+Process
+   ↓
+listens_on
+   ↓
+Listening Port
+   ↓
+has_connection
+   ↓
+Network Connection
+```
+
+The important thing is that we implement **13 progressively**, not all at once.
+
+---
+
+# 🌌 Milestone 13 — Service Intelligence
+
+## What is a service?
+
+A **process** is something currently running.
+
+For example:
+
+```text
+PID 235
+nginx
+```
+
+A **service** is the operating-system concept that manages an application/process.
+
+For example:
+
+```text
+nginx.service
+       │
+       └── starts/manages nginx process
+```
+
+So Galaxy needs to distinguish:
+
+```text
+Process
+```
+
+from:
+
+```text
+Service
+```
+
+### Example
+
+```text
+Service
+   nginx.service
+       │
+       ↓
+Process
+   PID 235
+       │
+       ↓
+Listening Port
+   TCP :80
+```
+
+This is much more useful than merely knowing:
+
+```text
+PID 235 → port 80
+```
+
+because Galaxy can eventually understand:
+
+> "The nginx service is running, its process owns port 80, and that process has network connections."
+
+---
+
+# Milestone 13 breakdown
+
+I recommend:
+
+```text
+13A
+Service model
+        ↓
+13B
+systemd collector
+        ↓
+13C
+Service observations
+        ↓
+13D
+Service ↔ Process relationship
+        ↓
+13E
+Persist and query services
+        ↓
+13F
+Service tree / machine graph
+```
+
+We'll start with **13A**.
+
+---
+
+# 13A — Create the Service model
+
+Create:
+
+```text
+core/models/service.py
+```
+
+```python
+from dataclasses import dataclass
+from datetime import datetime
+
+
+@dataclass
+class Service:
+    name: str
+    state: str
+    startup_type: str
+    timestamp: datetime
+```
+
+---
+
+## Why do we need a model?
+
+You already have:
+
+```python
+Observation
+Relationship
+LifecycleEvent
+```
+
+Now we introduce the concept:
+
+```text
+Service
+```
+
+The model represents what a service **is**.
+
+For example:
+
+```python
+Service(
+    name="nginx",
+    state="active",
+    startup_type="enabled",
+    timestamp=...
+)
+```
+
+Notice that we're not putting the process PID here yet.
+
+That's intentional.
+
+A service and a process are **different entities**.
+
+Later we'll connect them using a relationship.
+
+---
+
+# 13B — Service collector
+
+Now we need Galaxy to discover Linux services.
+
+Because you're developing on Linux, we'll use **systemd** first.
+
+The simplest source is:
+
+```bash
+systemctl
+```
+
+For example:
+
+```bash
+systemctl list-units --type=service --all
+```
+
+This can show things like:
+
+```text
+nginx.service
+postgresql.service
+docker.service
+redis.service
+```
+
+We don't want Galaxy to depend on manually reading terminal output.
+
+We'll create a collector.
+
+Create:
+
+```text
+collectors/service.py
+```
+
+```python
+import subprocess
+
+from datetime import datetime, timezone
+
+from core.models.observation import Observation
+
+
+class ServiceCollector:
+
+    def collect(self):
+
+        observations = []
+
+        result = subprocess.run(
+            [
+                "systemctl",
+                "list-units",
+                "--type=service",
+                "--all",
+                "--no-legend",
+                "--no-pager",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        now = datetime.now(timezone.utc)
+
+        for line in result.stdout.splitlines():
+
+            parts = line.split(None, 4)
+
+            if len(parts) < 4:
+                continue
+
+            unit = parts[0]
+            load_state = parts[1]
+            active_state = parts[2]
+            sub_state = parts[3]
+
+            if not unit.endswith(".service"):
+                continue
+
+            service_name = unit[:-8]
+
+            observations.append(
+                Observation(
+                    source="systemd",
+                    entity_type="service",
+                    entity_id=f"service:{service_name}",
+                    timestamp=now,
+                    data={
+                        "name": service_name,
+                        "unit": unit,
+                        "load_state": load_state,
+                        "active_state": active_state,
+                        "sub_state": sub_state,
+                    },
+                )
+            )
+
+        return observations
+```
+
+---
+
+# Let's understand this carefully
+
+The important part is:
+
+```python
+result = subprocess.run(...)
+```
+
+Galaxy executes:
+
+```text
+systemctl list-units --type=service --all
+```
+
+and captures its output.
+
+---
+
+## This:
+
+```python
+result.stdout
+```
+
+contains something approximately like:
+
+```text
+nginx.service loaded active running nginx
+docker.service loaded active running Docker
+something.service loaded inactive dead ...
+```
+
+We then split each line:
+
+```python
+parts = line.split(None, 4)
+```
+
+So:
+
+```text
+nginx.service
+loaded
+active
+running
+```
+
+becomes:
+
+```python
+parts[0] → nginx.service
+parts[1] → loaded
+parts[2] → active
+parts[3] → running
+```
+
+---
+
+# Galaxy then creates an Observation
+
+For nginx:
+
+```python
+Observation(
+    source="systemd",
+    entity_type="service",
+    entity_id="service:nginx",
+    ...
+)
+```
+
+The important distinction is:
+
+```text
+entity_type
+    ↓
+service
+```
+
+and:
+
+```text
+entity_id
+    ↓
+service:nginx
+```
+
+So now Galaxy understands another entity type.
+
+---
+
+# 13C — Add ServiceCollector to Orchestrator
+
+Your current code has:
+
+```python
+self.collectors = [
+    SystemCollector(),
+    ProcessCollector(),
+    NetworkCollector(),
+]
+```
+
+Change it to:
+
+```python
+from collectors.service import ServiceCollector
+```
+
+and:
+
+```python
+self.collectors = [
+    SystemCollector(),
+    ProcessCollector(),
+    NetworkCollector(),
+    ServiceCollector(),
+]
+```
+
+That's all we need to change in the collector registration.
+
+Your existing collection mechanism already does:
+
+```python
+for collector in self.collectors:
+
+    observations = collector.collect()
+
+    all_observations.extend(observations)
+```
+
+Therefore ServiceCollector automatically participates.
+
+This is exactly why your collector architecture is useful.
+
+---
+
+# 13D — Test service collection independently
+
+Before touching relationships, create:
+
+```text
+tests/test_service.py
+```
+
+```python
+from collectors.service import ServiceCollector
+
+
+collector = ServiceCollector()
+
+observations = collector.collect()
+
+print("Services found:", len(observations))
+
+for observation in observations[:20]:
+
+    print()
+    print("Entity:", observation.entity_id)
+    print("Data:", observation.data)
+```
+
+Run:
+
+```bash
+python -m tests.test_service
+```
+
+You should get something similar to:
+
+```text
+Services found: 80
+
+Entity: service:systemd-journald
+Data: {
+    'name': 'systemd-journald',
+    'unit': 'systemd-journald.service',
+    'load_state': 'loaded',
+    'active_state': 'active',
+    'sub_state': 'running'
+}
+```
+
+Your exact number will obviously differ.
+
+---
+
+# Very important: don't implement PID mapping yet
+
+At this point, we have:
+
+```text
+Service
+```
+
+but not:
+
+```text
+Service → Process
+```
+
+That's intentional.
+
+First prove:
+
+```text
+systemd
+   ↓
+Service observations
+   ↓
+SQLite
+```
+
+works.
+
+Then we'll establish the relationship.
+
+---
+
+# 13E — Persist service observations
+
+Your existing:
+
+```python
+self.store.save(all_observations)
+```
+
+already handles them.
+
+You don't need:
+
+```python
+save_services()
+```
+
+because your observation storage is generic.
+
+It can store:
+
+```text
+process
+network_interface
+listening_port
+network_connection
+service
+```
+
+using the same table.
+
+That's good architecture.
+
+---
+
+# Verify the database
+
+After running:
+
+```bash
+python main.py
+```
+
+you can inspect:
+
+```python
+from core.storage.sqlite_store import SQLiteStore
+
+
+store = SQLiteStore()
+
+services = [
+    observation
+    for observation in store.all()
+    if observation.entity_type == "service"
+]
+
+print("Services:", len(services))
+
+for service in services[:10]:
+    print(service)
+```
+
+---
+
+# But we still haven't achieved the real goal
+
+The interesting architecture is not:
+
+```text
+Service
+```
+
+by itself.
+
+It's:
+
+```text
+Service
+   │
+   ↓
+Process
+```
+
+For example:
+
+```text
+nginx.service
+      │
+      │ manages
+      ↓
+PID 235
+      │
+      │ listens_on
+      ↓
+TCP :80
+```
+
+That's the next milestone.
+
+---
+
+# 13F — Service → Process
+
+This is where things get interesting.
+
+systemd can tell us which process belongs to a service.
+
+For a service, we can obtain information such as:
+
+```text
+MainPID
+```
+
+For example:
+
+```bash
+systemctl show nginx.service --property=MainPID
+```
+
+which might return:
+
+```text
+MainPID=235
+```
+
+Then Galaxy already has:
+
+```text
+ProcessIdentityMap
+```
+
+So we can do:
+
+```text
+systemd
+   ↓
+MainPID = 235
+   ↓
+ProcessIdentityMap
+   ↓
+pid:235@create_time
+```
+
+This is exactly why your identity-map work earlier was important.
+
+---
+
+# The architecture we're building
+
+After 13 is complete:
+
+```text
+                         GALAXY
+                            │
+       ┌────────────────────┼────────────────────┐
+       │                    │                    │
+       ↓                    ↓                    ↓
+     System              Process              Network
+                            │                    │
+                            │                    ├── Interface
+                            │                    ├── Port
+                            │                    └── Connection
+                            │
+                    Process Identity
+                            │
+                    Process Lifecycle
+                            │
+                    Process Relationships
+                            │
+             ┌──────────────┴──────────────┐
+             ↓                             ↓
+         Service                       Network
+             │                             │
+             │ manages                     │
+             ↓                             │
+         Process ─────── listens_on ──────┘
+             │
+             │ has_connection
+             ↓
+      Network Connection
+```
+
+And eventually:
+
+```text
+Service
+   │
+   └── Process
+         │
+         ├── CPU
+         ├── Memory
+         ├── Lifecycle
+         ├── Listening Port
+         └── Network Connection
+```
+
+That is the **machine understanding** layer we wanted.
+
+---
+
+# Your immediate task
+
+Don't implement the entire 13 series yet.
+
+Do **13A → 13C first**:
+
+### 1. Create
+
+```text
+core/models/service.py
+```
+
+with the `Service` dataclass.
+
+### 2. Create
+
+```text
+collectors/service.py
+```
+
+with `ServiceCollector`.
+
+### 3. Add:
+
+```python
+from collectors.service import ServiceCollector
+```
+
+and:
+
+```python
+ServiceCollector(),
+```
+
+to your `Orchestrator`.
+
+### 4. Create:
+
+```text
+tests/test_service.py
+```
+
+### 5. Run:
+
+```bash
+python -m tests.test_service
+```
+
+**Do not move to Service → Process yet.**
+
+Once you show me the output of `test_service`, we'll do **13D — connect systemd services to your existing process identity map**, and I'll give you the updated files and explain exactly how `MainPID → ProcessIdentityMap → stable process entity ID` works.

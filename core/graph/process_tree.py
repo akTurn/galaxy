@@ -8,11 +8,26 @@ class ProcessTree:
         self.store = store
         self.identity_map = identity_map
 
+        # get_tree(root_pid)
+        #         │
+        #         │ root_pid = 1234
+        #         ▼
+        # identity_map.get(1234)
+        #         │
+        #         │ returns
+        #         ▼
+        # "pid:1234@4567.89"
+        #         │
+        #         │ stored in
+        #         ▼
+        # root_entity_id
+
+
     def get_tree(self, root_pid):
 
          # root_entity_id = f"pid:{root_pid}"
 
-        root_entity_id = self.identity_map.get(root_pid)
+        root_entity_id = self.identity_map.get(root_pid)#convert pid to entityId
 
         if root_entity_id is None:
             return None    #handles a PID that doesn't exist anymore.   
@@ -42,8 +57,68 @@ class ProcessTree:
 
             child_tree = self._build_tree(
                 child_entity_id
-            )
+            )#Recursion
 
             tree["children"].append(child_tree)
 
         return tree
+
+
+        # ProcessIdentityMap = "Which entity represents this PID?"
+
+        # SQLiteStore = "Which entities are children of this entity?"
+
+        # ProcessTree = "Put those relationships together into a nested tree."
+
+
+        #               observations                    
+        #                │
+        #                ▼
+        #      ProcessIdentityMap
+        #                │
+        #                │
+        #       100 → entity-A
+        #                │
+        #                │
+        #                ▼
+        #       process_tree.get_tree(100)
+        #                │
+        #                ▼
+        #   identity_map.get(100)
+        #                │
+        #                ▼
+        #           entity-A
+        #                │
+        #                ▼
+        #     _build_tree(entity-A)
+        #                │
+        #                ▼
+        #  store.get_children(entity-A)
+        #                │
+        #        ┌───────┴───────┐
+        #        ▼               ▼
+        #    entity-B         entity-C
+        #        │               │
+        #        ▼               ▼
+        #  _build_tree(B)  _build_tree(C)
+        #        │               │
+        #        ▼               ▼
+        #      children        children
+        #        │               │
+        #        └───────┬───────┘
+        #                ▼
+        #          nested dictionary
+
+        # PID
+        # │
+        # │ ProcessIdentityMap
+        # ▼
+        # Entity ID
+        # │
+        # │ SQLiteStore
+        # ▼
+        # Children
+        # │
+        # │ recursion
+        # ▼
+        # Complete process tree

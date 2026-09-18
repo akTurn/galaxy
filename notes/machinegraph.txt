@@ -1,0 +1,1181 @@
+Yes. You are at the right point for **Milestone 13**. You already have a `ProcessTree` and a first `NetworkGraph`, but they are doing slightly different jobs. The goal now is to make the graph layer **generic**, so Galaxy doesn't need a separate class every time we introduce a new relationship.
+
+Let's do this incrementally and **don't change the collectors**.
+
+---
+
+# Milestone 13 — Machine Graph & Relationship Navigation
+
+## 1. First understand what you already have
+
+Your database now contains two important kinds of information.
+
+### Observations
+
+For example:
+
+```text
+process
+pid:227@...
+```
+
+```text
+service
+service:nginx
+```
+
+```text
+listening_port
+TCP:0.0.0.0:80
+```
+
+### Relationships
+
+For example:
+
+```text
+service:nginx
+    --manages-->
+pid:227@...
+```
+
+and:
+
+```text
+pid:227@...
+    --listens_on-->
+TCP:0.0.0.0:80
+```
+
+and:
+
+```text
+pid:1@...
+    --parent_of-->
+pid:227@...
+```
+
+So Galaxy currently knows:
+
+```text
+             service:nginx
+                   |
+                manages
+                   |
+                   v
+             pid:227@...
+              /         \
+        parent_of      listens_on
+          /                \
+         v                  v
+   another process    TCP:0.0.0.0:80
+```
+
+**That is already a graph.**
+
+The problem is that we don't yet have one clean component responsible for navigating that graph.
+
+---
+
+# 2. What is the job of `MachineGraph`?
+
+We now introduce:
+
+```text
+core/graph/machine_graph.py
+```
+
+Its job is simple:
+
+> Given an entity, find what is connected to it.
+
+It should NOT:
+
+* collect processes
+* collect network information
+* collect services
+* save observations
+* create relationships
+* understand systemd
+* understand Linux
+
+Those jobs already belong elsewhere.
+
+`MachineGraph` only **navigates relationships**.
+
+---
+
+# 3. Before coding, understand the relationship row
+
+Your SQLite relationship query returns:
+
+```python
+(
+    source_entity_type,
+    source_entity_id,
+    relationship_type,
+    target_entity_type,
+    target_entity_id,
+    timestamp
+)
+```
+
+So:
+
+```python
+relationship[0]
+```
+
+is:
+
+```text
+source_entity_type
+```
+
+`relationship[1]`:
+
+```text
+source_entity_id
+```
+
+`relationship[2]`:
+
+```text
+relationship_type
+```
+
+`relationship[3]`:
+
+```text
+target_entity_type
+```
+
+`relationship[4]`:
+
+```text
+target_entity_id
+```
+
+`relationship[5]`:
+
+```text
+timestamp
+```
+
+For example:
+
+```python
+(
+    "service",
+    "service:nginx",
+    "manages",
+    "process",
+    "pid:227@1789548733.54",
+    timestamp
+)
+```
+
+means:
+
+```text
+service:nginx
+      |
+    manages
+      |
+      v
+pid:227@1789548733.54
+```
+
+Your current `NetworkGraph` already understands this structure.
+
+We're going to generalize that idea.
+
+---
+
+# 4. Step 1 — Create `MachineGraph`
+
+Create:
+
+```text
+core/graph/machine_graph.py
+```
+
+Start with only this:
+
+```python
+from core.storage.sqlite_store import SQLiteStore
+
+
+class MachineGraph:
+
+    def __init__(self, store: SQLiteStore):
+        self.store = store
+```
+
+That's all.
+
+At this point the class simply has access to the database.
+
+---
+
+# 5. Step 2 — Get all relationships
+
+Add:
+
+```python
+    def _relationships(self):
+
+        return self.store.all_relationships()
+```
+
+Why have this tiny method?
+
+Because later we may want to change how relationships are loaded.
+
+For now:
+
+```python
+self.store.all_relationships()
+```
+
+gives us everything.
+
+---
+
+# 6. Step 3 — Find outgoing relationships
+
+Now add:
+
+```python
+    def get_outgoing(self, entity_id):
+
+        relationships = self._relationships()
+
+        results = []
+
+        for relationship in relationships:
+
+            source_id = relationship[1]
+
+            if source_id == entity_id:
+
+                results.append(relationship)
+
+        return results
+```
+
+Suppose the database contains:
+
+```text
+service:nginx -> manages -> pid:227
+pid:227 -> listens_on -> TCP:0.0.0.0:80
+pid:1 -> parent_of -> pid:227
+```
+
+Then:
+
+```python
+graph.get_outgoing("pid:227")
+```
+
+could return:
+
+```text
+pid:227 -> listens_on -> TCP:0.0.0.0:80
+```
+
+while:
+
+```python
+graph.get_outgoing("service:nginx")
+```
+
+returns:
+
+```text
+service:nginx -> manages -> pid:227
+```
+
+---
+
+# 7. Step 4 — Find incoming relationships
+
+Now add:
+
+```python
+    def get_incoming(self, entity_id):
+
+        relationships = self._relationships()
+
+        results = []
+
+        for relationship in relationships:
+
+            target_id = relationship[4]
+
+            if target_id == entity_id:
+
+                results.append(relationship)
+
+        return results
+```
+
+This is important.
+
+Suppose:
+
+```text
+service:nginx
+      |
+    manages
+      |
+      v
+pid:227
+```
+
+Then:
+
+```python
+graph.get_incoming("pid:227")
+```
+
+returns the relationship:
+
+```text
+service:nginx -> manages -> pid:227
+```
+
+So:
+
+```text
+outgoing
+```
+
+means:
+
+> What does this entity point to?
+
+while:
+
+```text
+incoming
+```
+
+means:
+
+> What points to this entity?
+
+---
+
+# 8. Step 5 — Create `get_neighbors()`
+
+You already wrote this in `NetworkGraph`.
+
+Now move that concept into the generic graph.
+
+Add:
+
+```python
+    def get_neighbors(self, entity_id):
+
+        relationships = self._relationships()
+
+        neighbors = []
+
+        for relationship in relationships:
+
+            source_id = relationship[1]
+            relationship_type = relationship[2]
+            target_id = relationship[4]
+
+            if source_id == entity_id:
+
+                neighbors.append({
+                    "direction": "out",
+                    "relationship": relationship_type,
+                    "entity_id": target_id,
+                })
+
+            elif target_id == entity_id:
+
+                neighbors.append({
+                    "direction": "in",
+                    "relationship": relationship_type,
+                    "entity_id": source_id,
+                })
+
+        return neighbors
+```
+
+Now we have a generic operation.
+
+For:
+
+```python
+graph.get_neighbors("pid:227")
+```
+
+we might get:
+
+```python
+[
+    {
+        "direction": "in",
+        "relationship": "manages",
+        "entity_id": "service:nginx"
+    },
+    {
+        "direction": "in",
+        "relationship": "parent_of",
+        "entity_id": "pid:1@..."
+    },
+    {
+        "direction": "out",
+        "relationship": "listens_on",
+        "entity_id": "TCP:0.0.0.0:80"
+    }
+]
+```
+
+This is much more powerful than `ProcessTree`.
+
+---
+
+# 9. Why is this better than `NetworkGraph`?
+
+Your current `NetworkGraph` has methods such as:
+
+```python
+get_process_connections()
+get_connection_processes()
+get_port_processes()
+```
+
+Those methods understand specific network concepts.
+
+But `MachineGraph` doesn't need to know what a port or process is.
+
+It simply sees:
+
+```text
+A --relationship--> B
+```
+
+For example:
+
+```text
+service --manages--> process
+```
+
+or:
+
+```text
+process --listens_on--> port
+```
+
+or:
+
+```text
+process --parent_of--> process
+```
+
+The graph layer becomes generic.
+
+---
+
+# 10. Step 6 — Filter by relationship type
+
+Your existing `NetworkGraph` already has this idea.
+
+Let's add it cleanly:
+
+```python
+    def get_neighbors(
+        self,
+        entity_id,
+        relationship_type=None,
+    ):
+
+        relationships = self._relationships()
+
+        neighbors = []
+
+        for relationship in relationships:
+
+            source_id = relationship[1]
+            current_relationship = relationship[2]
+            target_id = relationship[4]
+
+            if (
+                relationship_type is not None
+                and current_relationship != relationship_type
+            ):
+                continue
+
+            if source_id == entity_id:
+
+                neighbors.append({
+                    "direction": "out",
+                    "relationship": current_relationship,
+                    "entity_id": target_id,
+                })
+
+            elif target_id == entity_id:
+
+                neighbors.append({
+                    "direction": "in",
+                    "relationship": current_relationship,
+                    "entity_id": source_id,
+                })
+
+        return neighbors
+```
+
+Now you can ask:
+
+```python
+graph.get_neighbors(
+    "pid:227@...",
+    "listens_on"
+)
+```
+
+and get only:
+
+```text
+TCP:0.0.0.0:80
+```
+
+Or:
+
+```python
+graph.get_neighbors(
+    "pid:227@...",
+    "parent_of"
+)
+```
+
+---
+
+# 11. Step 7 — Add traversal
+
+This is the important part.
+
+We want Galaxy to be able to say:
+
+> Start at this entity and show me everything connected within 3 levels.
+
+Add:
+
+```python
+    def traverse(self, root_entity_id, max_depth=3):
+
+        visited = set()
+
+        def walk(entity_id, depth):
+
+            if depth > max_depth:
+                return None
+
+            if entity_id in visited:
+                return None
+
+            visited.add(entity_id)
+
+            node = {
+                "entity_id": entity_id,
+                "neighbors": [],
+            }
+
+            neighbors = self.get_neighbors(entity_id)
+
+            for neighbor in neighbors:
+
+                child = walk(
+                    neighbor["entity_id"],
+                    depth + 1,
+                )
+
+                if child is None:
+                    continue
+
+                node["neighbors"].append({
+                    "relationship": neighbor["relationship"],
+                    "direction": neighbor["direction"],
+                    "node": child,
+                })
+
+            return node
+
+        return walk(root_entity_id, 0)
+```
+
+This is very similar to your existing `NetworkGraph.traverse()`.
+
+The difference is that now it belongs to the **general machine graph**.
+
+---
+
+# 12. Why do we need `visited`?
+
+This is extremely important.
+
+Graphs can contain cycles.
+
+Imagine:
+
+```text
+A -> B
+B -> C
+C -> A
+```
+
+Without:
+
+```python
+visited = set()
+```
+
+Galaxy could do:
+
+```text
+A
+ ↓
+B
+ ↓
+C
+ ↓
+A
+ ↓
+B
+ ↓
+C
+...
+```
+
+forever.
+
+So:
+
+```python
+if entity_id in visited:
+    return None
+```
+
+means:
+
+> We have already visited this entity. Don't follow it again.
+
+This is standard graph traversal.
+
+---
+
+# 13. Your complete `MachineGraph`
+
+At this stage, make the file:
+
+```python
+from core.storage.sqlite_store import SQLiteStore
+
+
+class MachineGraph:
+
+    def __init__(self, store: SQLiteStore):
+        self.store = store
+
+    def _relationships(self):
+
+        return self.store.all_relationships()
+
+    def get_outgoing(self, entity_id):
+
+        relationships = self._relationships()
+
+        results = []
+
+        for relationship in relationships:
+
+            source_id = relationship[1]
+
+            if source_id == entity_id:
+                results.append(relationship)
+
+        return results
+
+    def get_incoming(self, entity_id):
+
+        relationships = self._relationships()
+
+        results = []
+
+        for relationship in relationships:
+
+            target_id = relationship[4]
+
+            if target_id == entity_id:
+                results.append(relationship)
+
+        return results
+
+    def get_neighbors(
+        self,
+        entity_id,
+        relationship_type=None,
+    ):
+
+        relationships = self._relationships()
+
+        neighbors = []
+
+        for relationship in relationships:
+
+            source_id = relationship[1]
+            current_relationship = relationship[2]
+            target_id = relationship[4]
+
+            if (
+                relationship_type is not None
+                and current_relationship != relationship_type
+            ):
+                continue
+
+            if source_id == entity_id:
+
+                neighbors.append({
+                    "direction": "out",
+                    "relationship": current_relationship,
+                    "entity_id": target_id,
+                })
+
+            elif target_id == entity_id:
+
+                neighbors.append({
+                    "direction": "in",
+                    "relationship": current_relationship,
+                    "entity_id": source_id,
+                })
+
+        return neighbors
+
+    def traverse(self, root_entity_id, max_depth=3):
+
+        visited = set()
+
+        def walk(entity_id, depth):
+
+            if depth > max_depth:
+                return None
+
+            if entity_id in visited:
+                return None
+
+            visited.add(entity_id)
+
+            node = {
+                "entity_id": entity_id,
+                "neighbors": [],
+            }
+
+            for neighbor in self.get_neighbors(entity_id):
+
+                child = walk(
+                    neighbor["entity_id"],
+                    depth + 1,
+                )
+
+                if child is None:
+                    continue
+
+                node["neighbors"].append({
+                    "relationship": neighbor["relationship"],
+                    "direction": neighbor["direction"],
+                    "node": child,
+                })
+
+            return node
+
+        return walk(root_entity_id, 0)
+```
+
+---
+
+# 14. Step 8 — Test it
+
+Create:
+
+```text
+tests/test_machine_graph.py
+```
+
+Start with:
+
+```python
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+
+store = SQLiteStore()
+
+graph = MachineGraph(store)
+
+relationships = store.all_relationships()
+
+print("Relationships:", len(relationships))
+
+print()
+print("Testing neighbors")
+print("=================")
+
+for relationship in relationships:
+
+    entity_id = relationship[1]
+
+    print()
+    print("Entity:", entity_id)
+
+    neighbors = graph.get_neighbors(entity_id)
+
+    for neighbor in neighbors:
+
+        print(
+            " ",
+            neighbor["direction"],
+            neighbor["relationship"],
+            neighbor["entity_id"],
+        )
+
+    break
+```
+
+Run:
+
+```bash
+python -m tests.test_machine_graph
+```
+
+Don't worry about the exact output yet.
+
+We are simply proving that the graph can navigate the relationships already stored.
+
+---
+
+# 15. Step 9 — Test something meaningful
+
+Because you know you have:
+
+```text
+service:nginx
+```
+
+you can test:
+
+```python
+service_id = "service:nginx"
+
+print("Neighbors of:", service_id)
+
+neighbors = graph.get_neighbors(service_id)
+
+for neighbor in neighbors:
+
+    print(
+        neighbor["direction"],
+        neighbor["relationship"],
+        neighbor["entity_id"],
+    )
+```
+
+You should get something similar to:
+
+```text
+Neighbors of: service:nginx
+
+out manages pid:227@...
+```
+
+That proves:
+
+```text
+Service
+   ↓
+Process
+```
+
+works through the generic graph.
+
+---
+
+# 16. Step 10 — Test the complete path
+
+Now try:
+
+```python
+tree = graph.traverse(
+    "service:nginx",
+    max_depth=3,
+)
+
+print(tree)
+```
+
+Conceptually, you want something like:
+
+```text
+service:nginx
+    |
+    | manages
+    v
+pid:227@...
+    |
+    | listens_on
+    v
+TCP:0.0.0.0:80
+```
+
+And possibly other relationships connected to that process.
+
+This is the first real demonstration that Galaxy is no longer thinking about:
+
+> services, processes, and network information separately.
+
+It is seeing:
+
+> **connected entities.**
+
+---
+
+# 17. What happens to `ProcessTree`?
+
+**Do not delete it yet.**
+
+Your existing:
+
+```python
+ProcessTree
+```
+
+is still useful because it produces a nice hierarchical representation:
+
+```text
+pid:1
+├── pid:2
+│   └── pid:6
+├── pid:43
+├── pid:97
+│   ├── pid:...
+│   └── pid:...
+└── ...
+```
+
+That's specifically a **process hierarchy**.
+
+`MachineGraph`, however, is more general:
+
+```text
+service
+   ↓
+process
+   ↓
+port
+```
+
+and:
+
+```text
+process
+   ↓
+process
+```
+
+and:
+
+```text
+process
+   ↓
+network connection
+```
+
+So:
+
+```text
+ProcessTree
+    ↓
+specialized process hierarchy view
+
+MachineGraph
+    ↓
+general machine relationship graph
+```
+
+Keep both for now.
+
+---
+
+# 18. What happens to `NetworkGraph`?
+
+Same principle.
+
+Your current:
+
+```python
+NetworkGraph
+```
+
+contains useful network-specific convenience methods:
+
+```python
+get_process_connections()
+get_connection_processes()
+get_port_processes()
+```
+
+Don't break them yet.
+
+Eventually we can decide whether those methods should become thin wrappers around `MachineGraph`.
+
+For example:
+
+```python
+NetworkGraph
+       |
+       v
+MachineGraph
+       |
+       v
+SQLite relationships
+```
+
+But **don't refactor that yet**.
+
+First make the generic graph work.
+
+---
+
+# 19. The architecture after Milestone 13
+
+You'll have something like:
+
+```text
+                    GALAXY
+                       |
+                       v
+                 Orchestrator
+                       |
+          +------------+------------+
+          |            |            |
+          v            v            v
+      Process       Network      Service
+      Collector     Collector    Collector
+          |            |            |
+          +------------+------------+
+                       |
+                       v
+                  Observations
+                       |
+                       v
+                  SQLiteStore
+                       |
+                       v
+                 Relationships
+                       |
+                       v
+                MachineGraph
+                       |
+             +---------+---------+
+             |                   |
+             v                   v
+        Navigation          Traversal
+```
+
+This is a significant architectural milestone.
+
+---
+
+# 20. And this prepares us for Milestone 14
+
+Don't jump there yet, but this is where the architecture is heading.
+
+Once Galaxy can traverse:
+
+```text
+Service
+  ↓
+Process
+  ↓
+Port
+  ↓
+Connection
+```
+
+we can start asking higher-level questions.
+
+For example:
+
+```text
+Which service owns this process?
+```
+
+```text
+Which process is listening on port 80?
+```
+
+```text
+Which ports belong to nginx?
+```
+
+```text
+What network connections are associated with this process?
+```
+
+Eventually:
+
+```text
+CPU spike
+    ↓
+Process
+    ↓
+Service
+    ↓
+Port
+    ↓
+Network connection
+```
+
+That is the beginning of **correlation** rather than simple collection.
+
+---
+
+## One important correction before you proceed
+
+Your current `NetworkGraph` and the new `MachineGraph` both call:
+
+```python
+self.store.all_relationships()
+```
+
+every time they search.
+
+That's perfectly acceptable **for now**, because we're learning and building the architecture.
+
+Later, when Galaxy has thousands or millions of relationships, repeatedly loading the entire relationship table will be inefficient.
+
+We can eventually change this to database-level queries or build an indexed in-memory graph.
+
+**Do not optimize that now.**
+
+The immediate goal is:
+
+```text
+13A  Generic relationship navigation
+ ↓
+13B  Generic graph traversal
+ ↓
+13C  Test service → process → port
+ ↓
+13D  Keep ProcessTree/NetworkGraph as specialized views
+```
+
+Once those tests pass, **Milestone 13 is genuinely complete** and we can move to the next architectural layer rather than adding random collectors.
+
+
+

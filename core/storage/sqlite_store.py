@@ -230,6 +230,25 @@ class SQLiteStore:
 
         return cursor.fetchall()
 
+    def get_latest_relationship(self):
+        cursor = self.conn.execute(
+            """
+            SELECT
+                source_entity_type,
+                source_entity_id,
+                relationship_type,
+                target_entity_type,
+                target_entity_id,
+                timestamp
+            FROM relationships
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """
+        )
+
+        return cursor.fetchone()
+
+
 
 
     def get_children(self, parent_entity_id):
@@ -345,6 +364,96 @@ class SQLiteStore:
         )
 
         return cursor.fetchall()
+
+
+    # def current_relationshipsold(self):
+    # cursor = self.conn.execute(
+    #     """
+    #     SELECT
+    #         r.source_entity_type,
+    #         r.source_entity_id,
+    #         r.relationship_type,
+    #         r.target_entity_type,
+    #         r.target_entity_id,
+    #         r.timestamp
+    #     FROM relationships r
+    #     INNER JOIN (
+    #         SELECT
+    #             source_entity_type,
+    #             source_entity_id,
+    #             relationship_type,
+    #             target_entity_type,
+    #             target_entity_id,
+    #             MAX(timestamp) AS latest_timestamp
+    #         FROM relationships
+    #         GROUP BY
+    #             source_entity_type,
+    #             source_entity_id,
+    #             relationship_type,
+    #             target_entity_type,
+    #             target_entity_id
+    #     ) latest
+    #     ON r.source_entity_type = latest.source_entity_type
+    #     AND r.source_entity_id = latest.source_entity_id
+    #     AND r.relationship_type = latest.relationship_type
+    #     AND r.target_entity_type = latest.target_entity_type
+    #     AND r.target_entity_id = latest.target_entity_id
+    #     AND r.timestamp = latest.latest_timestamp
+    #     ORDER BY r.id ASC
+    #     """
+    # )
+
+    # return cursor.fetchall()
+
+
+# def current_relationships1edit(self):
+#     relationships = self.all_relationships()
+
+#     latest = {}
+
+#     for relationship in relationships:
+
+#         source_type = relationship[0]
+#         source_id = relationship[1]
+#         relationship_type = relationship[2]
+#         target_type = relationship[3]
+#         target_id = relationship[4]
+#         timestamp = relationship[5]
+
+#         key = (
+#             source_type,
+#             source_id,
+#             relationship_type,
+#         )
+
+#         latest[key] = relationship
+
+#     return list(latest.values())
+
+    def current_relationships(self):
+
+        relationships = self.all_relationships()
+
+        latest = {}
+
+        for relationship in relationships:
+
+            key = (
+                relationship[0],  # source type
+                relationship[1],  # source id
+                relationship[2],  # relationship type
+            )
+
+            existing = latest.get(key)
+
+            if existing is None:
+                latest[key] = relationship
+                continue
+
+            if relationship[5] > existing[5]:
+                latest[key] = relationship
+
+        return list(latest.values())
 
 
 

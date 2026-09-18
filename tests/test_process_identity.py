@@ -24,6 +24,23 @@ print(second)
 
 assert first != second
 
+
+first = ProcessIdentity.from_process(
+    39038,
+    1788949759.18
+)
+
+same_process = ProcessIdentity.from_process(
+    39038,
+    1788949759.18
+)
+
+
+print(first)
+print(same_process)
+
+assert first == same_process
+
 # # And the important assertion:
 
 # # assert first != second

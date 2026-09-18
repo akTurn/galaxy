@@ -1,0 +1,1875 @@
+Yes. Your output shows **Milestone 13 is partially working**, but it also reveals an important problem we need to fix before moving on.
+
+The biggest issue is this:
+
+```text
+Relationships: 13689
+```
+
+and then the same relationships are repeated many times.
+
+For example:
+
+```text
+out parent_of pid:39038
+in parent_of pid:1428
+...
+out parent_of pid:47034
+in parent_of pid:1428
+...
+```
+
+That is happening because every 10-second collection cycle is currently **appending the same logical relationships to SQLite again**.
+
+So before adding more graph features, Milestone 13 should be made structurally correct.
+
+---
+
+# 1. What Milestone 13 is supposed to accomplish
+
+We now have three layers:
+
+```text
+OBSERVATIONS
+     ↓
+RELATIONSHIPS
+     ↓
+MACHINE GRAPH
+```
+
+For example:
+
+```text
+service:nginx
+       |
+       | manages
+       ↓
+pid:227@...
+       |
+       | listens_on
+       ↓
+TCP:0.0.0.0:80
+```
+
+And:
+
+```text
+pid:1@...
+     |
+     | parent_of
+     ↓
+pid:227@...
+```
+
+So Galaxy can eventually understand:
+
+```text
+Service
+   ↓
+Process
+   ↓
+Port
+   ↓
+Network
+```
+
+That's exactly the direction we want.
+
+---
+
+# 2. Your `NetworkGraph` is doing the right conceptual job
+
+You currently have:
+
+```python
+class NetworkGraph:
+
+    def __init__(self, store):
+        self.store = store
+```
+
+This means:
+
+> The graph doesn't collect anything.
+
+It reads what Galaxy has already stored.
+
+That's important.
+
+We don't want:
+
+```text
+NetworkGraph
+    ↓
+psutil
+```
+
+We want:
+
+```text
+NetworkCollector
+       ↓
+Observation
+       ↓
+Relationship
+       ↓
+SQLite
+       ↓
+NetworkGraph
+```
+
+So your separation is good.
+
+---
+
+# 3. `get_neighbors()` is the most important method
+
+You have:
+
+```python
+def get_neighbors(self, entity_id, relationships=None):
+
+    if relationships is None:
+        relationships = self.store.all_relationships()
+
+    neighbors = []
+
+    for relationship in relationships:
+
+        source_id = relationship[1]
+        target_id = relationship[4]
+
+        if source_id == entity_id:
+            neighbors.append({
+                "direction": "out",
+                "relationship": relationship[2],
+                "entity_id": target_id,
+            })
+
+        elif target_id == entity_id:
+            neighbors.append({
+                "direction": "in",
+                "relationship": relationship[2],
+                "entity_id": source_id,
+            })
+
+    return neighbors
+```
+
+This is essentially asking:
+
+> "What entities are directly connected to this entity?"
+
+For:
+
+```text
+service:nginx
+       |
+       | manages
+       ↓
+pid:227
+```
+
+Calling:
+
+```python
+graph.get_neighbors("service:nginx")
+```
+
+should conceptually produce:
+
+```text
+[
+    {
+        "direction": "out",
+        "relationship": "manages",
+        "entity_id": "pid:227..."
+    }
+]
+```
+
+That's correct.
+
+---
+
+# 4. `traverse()` is the next important concept
+
+You have:
+
+```python
+def traverse(self, root_entity_id, max_depth=3):
+```
+
+This means:
+
+> Start from one entity and walk through the graph.
+
+For example:
+
+```python
+graph.traverse(
+    "service:nginx",
+    max_depth=3
+)
+```
+
+could eventually produce:
+
+```text
+service:nginx
+   |
+   | manages
+   ↓
+pid:227
+   |
+   | listens_on
+   ↓
+TCP:0.0.0.0:80
+```
+
+That's the beginning of **machine graph navigation**.
+
+---
+
+# 5. Why your current output is problematic
+
+This:
+
+```text
+Neighbors of: service:nginx
+out manages pid:249@1789467207.65
+out manages pid:249@1789467207.65
+out manages pid:249@1789467207.65
+...
+out manages pid:227@1789548733.54
+```
+
+should **not** normally happen.
+
+The repeated entries are not because `get_neighbors()` is fundamentally wrong.
+
+They're coming from the storage model.
+
+Every time you run:
+
+```python
+orchestrator.run_once()
+```
+
+you do:
+
+```python
+self.store.save_relationships(
+    all_relationships
+)
+```
+
+And `save_relationships()` does:
+
+```sql
+INSERT INTO relationships (...)
+VALUES (...)
+```
+
+So:
+
+```text
+Cycle 1
+    service:nginx → manages → pid:249
+
+Cycle 2
+    service:nginx → manages → pid:249
+
+Cycle 3
+    service:nginx → manages → pid:249
+
+Cycle 4
+    service:nginx → manages → pid:249
+```
+
+SQLite now contains four rows.
+
+---
+
+# 6. But there's an important architectural question
+
+We **do want history**.
+
+For example:
+
+```text
+09:00 nginx → pid:227
+09:01 nginx → pid:227
+09:02 nginx → pid:227
+09:03 nginx → pid:249
+```
+
+That is useful historical information.
+
+So I would **not simply delete duplicate relationships**.
+
+Instead, Milestone 13 needs to distinguish between:
+
+### Current graph
+
+"What is true now?"
+
+and
+
+### Historical graph
+
+"What relationships have existed over time?"
+
+Your database currently mostly gives us the second one.
+
+But `NetworkGraph.get_neighbors()` is treating all historical rows as if they represent the current graph.
+
+That's why the output becomes huge.
+
+---
+
+# 7. The next small change I recommend
+
+Add a method to `SQLiteStore`:
+
+```python
+def latest_relationships(self):
+```
+
+Its job will eventually be:
+
+> Give us only the latest known relationship for each logical relationship.
+
+Conceptually:
+
+```text
+history:
+
+service:nginx → pid:249
+service:nginx → pid:249
+service:nginx → pid:249
+service:nginx → pid:227
+
+latest:
+
+service:nginx → pid:227
+```
+
+Then the graph can work against the current state rather than the entire historical database.
+
+---
+
+# 8. But don't implement that blindly yet
+
+There's another important problem in your output:
+
+```text
+pid:249@1789467207.65
+```
+
+versus:
+
+```text
+pid:227@1789548733.54
+```
+
+Your process identity contains the process start time:
+
+```text
+pid:<PID>@<start_time>
+```
+
+That is good.
+
+It means:
+
+```text
+pid 227
+```
+
+from one process lifetime is different from:
+
+```text
+pid 227
+```
+
+after that process exits and another process gets PID 227.
+
+That's exactly what Galaxy needs.
+
+But it means a relationship is **time/lifecycle dependent**.
+
+For example:
+
+```text
+service:nginx
+      |
+      | manages
+      ↓
+pid:227@OLD_START
+```
+
+later becomes:
+
+```text
+service:nginx
+      |
+      | manages
+      ↓
+pid:227@NEW_START
+```
+
+Both relationships may be valid historical facts.
+
+Therefore we shouldn't make the database globally unique on:
+
+```text
+service + relationship + process
+```
+
+without considering lifecycle/time.
+
+---
+
+# 9. So Milestone 13 should have two concepts
+
+I would structure it like this:
+
+```text
+                    Galaxy
+                      |
+             +--------+--------+
+             |                 |
+         History            Current
+             |                 |
+       all observations   current graph
+       all relationships  navigation
+```
+
+Your existing:
+
+```python
+all_relationships()
+```
+
+is useful for history.
+
+Your new graph layer should eventually have something like:
+
+```python
+current_relationships()
+```
+
+for navigation.
+
+---
+
+# 10. Your `NetworkGraph` can then become very powerful
+
+For example:
+
+```python
+graph.get_neighbors("service:nginx")
+```
+
+could show:
+
+```text
+service:nginx
+    |
+    └── manages → pid:227@...
+```
+
+Then:
+
+```python
+graph.get_neighbors("pid:227@...")
+```
+
+could show:
+
+```text
+pid:227@...
+    |
+    ├── in parent_of → pid:1@...
+    |
+    └── out listens_on → TCP:0.0.0.0:80
+```
+
+Then:
+
+```python
+graph.get_neighbors("TCP:0.0.0.0:80")
+```
+
+could show:
+
+```text
+TCP:0.0.0.0:80
+    |
+    └── in listens_on → pid:227@...
+```
+
+Now Galaxy can walk the machine.
+
+---
+
+# 11. And this connects directly to the original Galaxy idea
+
+You described:
+
+```text
+observe
+   ↓
+collect
+   ↓
+normalize
+   ↓
+understand
+   ↓
+correlate
+   ↓
+analyze
+   ↓
+reason
+   ↓
+recommend
+   ↓
+approve
+   ↓
+act
+```
+
+We're currently around:
+
+```text
+observe
+   ↓
+collect
+   ↓
+normalize
+   ↓
+understand entities
+   ↓
+correlate
+   ↓
+        ★ Milestone 13
+        MACHINE GRAPH
+```
+
+We're **not yet at reasoning**.
+
+We're building the factual model that reasoning will eventually use.
+
+---
+
+# 12. What Galaxy knows now
+
+You have reached a pretty meaningful point.
+
+### Processes
+
+```text
+Process
+├── PID
+├── identity
+├── parent
+└── lifecycle
+```
+
+### Network
+
+```text
+Network Interface
+├── name
+├── addresses
+├── state
+├── speed
+└── MTU
+```
+
+### Listening ports
+
+```text
+Listening Port
+├── protocol
+├── address
+├── port
+└── state
+```
+
+### Network connections
+
+```text
+Network Connection
+├── local address
+├── local port
+├── remote address
+├── remote port
+└── state
+```
+
+### Services
+
+```text
+Service
+├── name
+├── state
+├── startup/load information
+└── main PID
+```
+
+### Relationships
+
+```text
+Process ──parent_of──> Process
+
+Process ──listens_on──> Port
+
+Process ──has_connection──> Connection
+
+Service ──manages──> Process
+```
+
+That is already a **machine topology model**.
+
+---
+
+# 13. What I would do next
+
+Don't jump to Milestone 14 yet.
+
+First finish Milestone 13 properly in this order:
+
+```text
+13A
+Generic neighbors
+        ↓
+13B
+Relationship filtering
+        ↓
+13C
+Traversal
+        ↓
+13D
+Current-vs-history graph
+        ↓
+13E
+Remove repeated graph output
+        ↓
+13F
+Test cross-domain traversal
+```
+
+The final test should be something like:
+
+```text
+service:nginx
+      ↓ manages
+process
+      ↓ listens_on
+port
+```
+
+and another:
+
+```text
+process
+      ↓ has_connection
+network_connection
+```
+
+Then we know the **machine graph itself is working**, rather than just individual relationship types.
+
+---
+
+## One more thing: your current test exposed an architectural bug
+
+This:
+
+```text
+Relationships: 13689
+```
+
+is actually useful.
+
+It tells us that Galaxy's **memory/history layer is working**, but the graph layer is currently mixing historical observations with current topology.
+
+So I would treat the next task as:
+
+> **Milestone 13D — Build a current machine graph on top of the historical relationship store.**
+
+That is the correct next step rather than adding another collector.
+
+And your existing `ProcessTree` should remain as-is. It is a **specialized process hierarchy view**; `NetworkGraph` is becoming the **generic machine relationship graph**. We don't need to replace one with the other.
+
+
+
+Yes. You already have **13A–13C essentially working**. The important problem visible in your output is that `all_relationships()` returns the **entire historical relationship table**, so `NetworkGraph` is currently traversing old snapshots as well as the current machine state.
+
+For **13D**, we should introduce a clear separation:
+
+> **Historical store = everything Galaxy has observed**
+> **Current machine graph = only the latest state of each relationship/entity**
+
+We should do this without changing your collectors.
+
+## Milestone 13D — Current Machine Graph
+
+Your architecture should become:
+
+```text
+Collectors
+    ↓
+Observations
+    ↓
+Relationships
+    ↓
+SQLite historical store
+    ↓
+       ┌─────────────────────┐
+       │ NetworkGraph        │
+       │                     │
+       │ historical graph    │
+       │ current graph       │
+       └─────────────────────┘
+                  ↓
+          current machine graph
+```
+
+The key question is:
+
+**How do we know which relationship is current?**
+
+Your relationship already has:
+
+```python
+timestamp
+```
+
+So for a given logical relationship:
+
+```text
+service:nginx
+    manages
+pid:227@1789548733.54
+```
+
+there may be many historical rows:
+
+```text
+nginx → manages → pid:249@...
+nginx → manages → pid:249@...
+nginx → manages → pid:249@...
+...
+nginx → manages → pid:227@...
+```
+
+For the **current graph**, we don't want all of them.
+
+---
+
+# 13D.1 First understand the problem
+
+You currently have:
+
+```python
+def get_neighbors(self, entity_id, relationships=None):
+
+    if relationships is None:
+        relationships = self.store.all_relationships()
+```
+
+Therefore:
+
+```python
+graph.get_neighbors("service:nginx")
+```
+
+means:
+
+> Give me every relationship nginx has ever had.
+
+That's why you're getting:
+
+```text
+out manages pid:249@...
+out manages pid:249@...
+out manages pid:249@...
+...
+out manages pid:227@...
+```
+
+This isn't a problem with `get_neighbors()` itself.
+
+The problem is that we haven't created a **current relationship view**.
+
+---
+
+# 13D.2 Don't delete historical relationships
+
+This is important.
+
+Do **not** change:
+
+```python
+relationships
+```
+
+to only contain current relationships.
+
+Your historical database is valuable.
+
+You want:
+
+```text
+relationships table
+────────────────────────────────────
+historical relationship 1
+historical relationship 2
+historical relationship 3
+...
+historical relationship N
+```
+
+That lets Galaxy answer questions like:
+
+> What process did nginx manage yesterday?
+
+and:
+
+> What process does nginx manage now?
+
+Those are different questions.
+
+So we keep the database exactly as it is.
+
+---
+
+# 13D.3 Add a current relationship method to SQLiteStore
+
+Add this method to `SQLiteStore`:
+
+```python
+def current_relationships(self):
+    cursor = self.conn.execute(
+        """
+        SELECT
+            r.source_entity_type,
+            r.source_entity_id,
+            r.relationship_type,
+            r.target_entity_type,
+            r.target_entity_id,
+            r.timestamp
+        FROM relationships r
+        INNER JOIN (
+            SELECT
+                source_entity_type,
+                source_entity_id,
+                relationship_type,
+                target_entity_type,
+                target_entity_id,
+                MAX(timestamp) AS latest_timestamp
+            FROM relationships
+            GROUP BY
+                source_entity_type,
+                source_entity_id,
+                relationship_type,
+                target_entity_type,
+                target_entity_id
+        ) latest
+        ON r.source_entity_type = latest.source_entity_type
+        AND r.source_entity_id = latest.source_entity_id
+        AND r.relationship_type = latest.relationship_type
+        AND r.target_entity_type = latest.target_entity_type
+        AND r.target_entity_id = latest.target_entity_id
+        AND r.timestamp = latest.latest_timestamp
+        ORDER BY r.id ASC
+        """
+    )
+
+    return cursor.fetchall()
+```
+
+### What does this do?
+
+Suppose your database contains:
+
+```text
+nginx → manages → pid:249
+nginx → manages → pid:249
+nginx → manages → pid:249
+nginx → manages → pid:227
+```
+
+The SQL groups by:
+
+```text
+source
+target
+relationship type
+```
+
+and takes:
+
+```sql
+MAX(timestamp)
+```
+
+So we retain the latest observation of each **exact relationship**.
+
+---
+
+# 13D.4 But there is a second problem
+
+There is an important subtlety here.
+
+Suppose nginx previously managed:
+
+```text
+pid:249
+```
+
+and now manages:
+
+```text
+pid:227
+```
+
+The query above gives us:
+
+```text
+nginx → manages → pid:249
+nginx → manages → pid:227
+```
+
+because both are technically different relationships.
+
+But the **current machine graph** should probably show:
+
+```text
+nginx
+  ↓ manages
+pid:227
+```
+
+not both.
+
+So we need to distinguish between:
+
+### Historical relationship
+
+```text
+nginx → manages → pid:249
+```
+
+and:
+
+### Current relationship
+
+```text
+nginx → manages → pid:227
+```
+
+For relationships such as `manages`, `listens_on`, and `parent_of`, the latest relationship from a given source may replace the old relationship.
+
+This is the real purpose of 13D.
+
+---
+
+# 13D.5 Build `current_relationships()` around relationship semantics
+
+I would make the method simpler initially.
+
+Replace/add this method:
+
+```python
+def current_relationships(self):
+    relationships = self.all_relationships()
+
+    latest = {}
+
+    for relationship in relationships:
+
+        source_type = relationship[0]
+        source_id = relationship[1]
+        relationship_type = relationship[2]
+        target_type = relationship[3]
+        target_id = relationship[4]
+        timestamp = relationship[5]
+
+        key = (
+            source_type,
+            source_id,
+            relationship_type,
+        )
+
+        latest[key] = relationship
+
+    return list(latest.values())
+```
+
+Now notice what we're doing.
+
+Instead of grouping by:
+
+```text
+source + relationship + target
+```
+
+we group by:
+
+```text
+source + relationship
+```
+
+Therefore:
+
+```text
+nginx → manages → pid:249
+nginx → manages → pid:249
+nginx → manages → pid:249
+nginx → manages → pid:227
+```
+
+becomes:
+
+```text
+nginx → manages → pid:227
+```
+
+because the later observation replaces the earlier one.
+
+---
+
+# 13D.6 One improvement: don't rely on dictionary insertion semantics
+
+I'd actually recommend making it explicit:
+
+```python
+def current_relationships(self):
+
+    relationships = self.all_relationships()
+
+    latest = {}
+
+    for relationship in relationships:
+
+        key = (
+            relationship[0],  # source type
+            relationship[1],  # source id
+            relationship[2],  # relationship type
+        )
+
+        existing = latest.get(key)
+
+        if existing is None:
+            latest[key] = relationship
+            continue
+
+        if relationship[5] > existing[5]:
+            latest[key] = relationship
+
+    return list(latest.values())
+```
+
+This says exactly what we mean:
+
+> For every source + relationship type, keep the newest relationship.
+
+---
+
+# 13D.7 Now modify `NetworkGraph`
+
+Currently you have:
+
+```python
+def get_neighbors(self, entity_id, relationships=None):
+
+    if relationships is None:
+        relationships = self.store.all_relationships()
+```
+
+Don't change that yet.
+
+Instead, add a separate current method.
+
+```python
+def get_current_relationships(self):
+
+    return self.store.current_relationships()
+```
+
+Then:
+
+```python
+def get_current_neighbors(self, entity_id):
+
+    relationships = self.store.current_relationships()
+
+    return self.get_neighbors(
+        entity_id,
+        relationships,
+    )
+```
+
+So now your API has two meanings:
+
+```python
+get_neighbors()
+```
+
+= historical graph
+
+and:
+
+```python
+get_current_neighbors()
+```
+
+= current machine graph
+
+That's a very clean design.
+
+---
+
+# 13D.8 Add current traversal
+
+Your existing:
+
+```python
+def traverse(self, root_entity_id, max_depth=3):
+```
+
+uses:
+
+```python
+relationships = self.store.all_relationships()
+```
+
+Therefore it traverses history.
+
+Don't destroy that method.
+
+Instead add:
+
+```python
+def traverse_current(self, root_entity_id, max_depth=3):
+
+    relationships = self.store.current_relationships()
+
+    visited = set()
+
+    def walk(entity_id, depth):
+
+        if depth > max_depth:
+            return None
+
+        if entity_id in visited:
+            return None
+
+        visited.add(entity_id)
+
+        node = {
+            "entity_id": entity_id,
+            "neighbors": []
+        }
+
+        for neighbor in self.get_neighbors(
+            entity_id,
+            relationships,
+        ):
+
+            child = walk(
+                neighbor["entity_id"],
+                depth + 1,
+            )
+
+            if child is not None:
+
+                node["neighbors"].append({
+                    "relationship": neighbor["relationship"],
+                    "direction": neighbor["direction"],
+                    "node": child,
+                })
+
+        return node
+
+    return walk(root_entity_id, 0)
+```
+
+Now you have:
+
+```text
+traverse()
+       ↓
+historical graph
+
+traverse_current()
+       ↓
+current machine graph
+```
+
+---
+
+# 13D.9 Your NetworkGraph becomes
+
+I would keep it approximately like this:
+
+```python
+class NetworkGraph:
+
+    def __init__(self, store):
+        self.store = store
+
+    def get_relationships_from(
+        self,
+        entity_id,
+        relationship_type=None,
+    ):
+
+        relationships = self.store.all_relationships()
+
+        results = [
+            relationship
+            for relationship in relationships
+            if relationship[1] == entity_id
+        ]
+
+        if relationship_type is not None:
+
+            results = [
+                relationship
+                for relationship in results
+                if relationship[2] == relationship_type
+            ]
+
+        return results
+
+    def get_current_relationships(self):
+
+        return self.store.current_relationships()
+
+    def get_neighbors(
+        self,
+        entity_id,
+        relationships=None,
+    ):
+
+        if relationships is None:
+            relationships = self.store.all_relationships()
+
+        neighbors = []
+
+        for relationship in relationships:
+
+            source_id = relationship[1]
+            target_id = relationship[4]
+
+            if source_id == entity_id:
+
+                neighbors.append({
+                    "direction": "out",
+                    "relationship": relationship[2],
+                    "entity_id": target_id,
+                })
+
+            elif target_id == entity_id:
+
+                neighbors.append({
+                    "direction": "in",
+                    "relationship": relationship[2],
+                    "entity_id": source_id,
+                })
+
+        return neighbors
+
+    def get_current_neighbors(self, entity_id):
+
+        relationships = self.store.current_relationships()
+
+        return self.get_neighbors(
+            entity_id,
+            relationships,
+        )
+
+    def traverse(
+        self,
+        root_entity_id,
+        max_depth=3,
+    ):
+
+        relationships = self.store.all_relationships()
+
+        return self._traverse(
+            root_entity_id,
+            relationships,
+            max_depth,
+        )
+
+    def traverse_current(
+        self,
+        root_entity_id,
+        max_depth=3,
+    ):
+
+        relationships = self.store.current_relationships()
+
+        return self._traverse(
+            root_entity_id,
+            relationships,
+            max_depth,
+        )
+
+    def _traverse(
+        self,
+        root_entity_id,
+        relationships,
+        max_depth,
+    ):
+
+        visited = set()
+
+        def walk(entity_id, depth):
+
+            if depth > max_depth:
+                return None
+
+            if entity_id in visited:
+                return None
+
+            visited.add(entity_id)
+
+            node = {
+                "entity_id": entity_id,
+                "neighbors": [],
+            }
+
+            for neighbor in self.get_neighbors(
+                entity_id,
+                relationships,
+            ):
+
+                child = walk(
+                    neighbor["entity_id"],
+                    depth + 1,
+                )
+
+                if child is not None:
+
+                    node["neighbors"].append({
+                        "relationship": neighbor["relationship"],
+                        "direction": neighbor["direction"],
+                        "node": child,
+                    })
+
+            return node
+
+        return walk(root_entity_id, 0)
+```
+
+This is a nice architectural improvement because you don't duplicate traversal logic.
+
+---
+
+# 13D.10 Now create the 13D test
+
+Create:
+
+```text
+tests/test_current_machine_graph.py
+```
+
+Start with something simple.
+
+```python
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.network import NetworkGraph
+
+
+store = SQLiteStore()
+
+graph = NetworkGraph(store)
+
+
+print("Historical relationships:")
+print("=========================")
+
+historical = graph.get_relationships_from(
+    "service:nginx",
+    "manages",
+)
+
+for relationship in historical[-10:]:
+
+    print(
+        relationship[1],
+        "->",
+        relationship[2],
+        "->",
+        relationship[4],
+    )
+
+
+print()
+print("Current relationships:")
+print("======================")
+
+current = graph.get_current_neighbors(
+    "service:nginx"
+)
+
+for neighbor in current:
+
+    print(
+        "service:nginx",
+        "->",
+        neighbor["relationship"],
+        "->",
+        neighbor["entity_id"],
+    )
+```
+
+Run:
+
+```bash
+python -m tests.test_current_machine_graph
+```
+
+You should now see a much smaller result.
+
+Instead of:
+
+```text
+service:nginx
+ -> manages -> pid:249...
+service:nginx
+ -> manages -> pid:249...
+service:nginx
+ -> manages -> pid:249...
+...
+service:nginx
+ -> manages -> pid:227...
+```
+
+you should get something like:
+
+```text
+Current relationships:
+======================
+
+service:nginx -> manages -> pid:227@1789548733.54
+```
+
+The exact PID/entity ID will depend on what's currently running.
+
+---
+
+# 13D.11 Now test the complete machine graph
+
+This is the more important test.
+
+You want:
+
+```text
+service
+   ↓ manages
+process
+   ↓ listens_on
+port
+```
+
+Your current relationship types already support this.
+
+For example:
+
+```text
+service:nginx
+       |
+       | manages
+       ↓
+pid:227@...
+       |
+       | listens_on
+       ↓
+TCP:0.0.0.0:80
+```
+
+However, there is one thing we need to check carefully.
+
+Your network relationship currently depends on the process identity map from the **current collection cycle**.
+
+That's good for generating relationships.
+
+But the database contains historical process identities.
+
+So the current graph can only traverse relationships that represent the latest current state.
+
+That's exactly why 13D is necessary.
+
+---
+
+# 13D.12 Test traversal
+
+Add to the test:
+
+```python
+print()
+print("Current machine graph:")
+print("======================")
+
+tree = graph.traverse_current(
+    "service:nginx",
+    max_depth=3,
+)
+
+print(tree)
+```
+
+Run:
+
+```bash
+python -m tests.test_current_machine_graph
+```
+
+Ideally you'll see something structurally like:
+
+```text
+{
+    'entity_id': 'service:nginx',
+    'neighbors': [
+        {
+            'relationship': 'manages',
+            'direction': 'out',
+            'node': {
+                'entity_id': 'pid:227@1789548733.54',
+                'neighbors': [
+                    {
+                        'relationship': 'listens_on',
+                        'direction': 'out',
+                        'node': {
+                            'entity_id': 'TCP:0.0.0.0:80',
+                            'neighbors': []
+                        }
+                    }
+                ]
+            }
+        }
+    ]
+}
+```
+
+That would demonstrate:
+
+```text
+service:nginx
+      ↓
+   manages
+      ↓
+process
+      ↓
+  listens_on
+      ↓
+ listening_port
+```
+
+That's the **machine graph**, rather than three unrelated relationship queries.
+
+---
+
+# 13D.13 Then test the other branch
+
+You specifically wanted:
+
+```text
+process
+    ↓ has_connection
+network_connection
+```
+
+Pick a process that actually has a `has_connection` relationship.
+
+You can find one with SQLite:
+
+```bash
+sqlite3 galaxy.db "
+SELECT
+    source_entity_id,
+    target_entity_id
+FROM relationships
+WHERE relationship_type = 'has_connection'
+LIMIT 10;
+"
+```
+
+You might get something like:
+
+```text
+pid:1234@...|TCP:...
+```
+
+Then test:
+
+```python
+tree = graph.traverse_current(
+    "pid:1234@...",
+    max_depth=2,
+)
+
+print(tree)
+```
+
+The expected structure is:
+
+```text
+process
+   ↓
+has_connection
+   ↓
+network_connection
+```
+
+---
+
+# 13D.14 One important issue in your current database
+
+Your output shows:
+
+```text
+Relationships: 13689
+```
+
+That's not necessarily wrong.
+
+Remember:
+
+```text
+every 10 seconds
+       ↓
+new observations
+       ↓
+new relationships
+       ↓
+historical database grows
+```
+
+So:
+
+```text
+13,689 relationships
+```
+
+means:
+
+> Galaxy has accumulated historical relationship observations.
+
+It does **not** mean:
+
+> The machine currently has 13,689 relationships.
+
+That's precisely the distinction 13D introduces.
+
+You will have:
+
+```text
+store.all_relationships()
+        ↓
+13,689 historical rows
+```
+
+but:
+
+```text
+store.current_relationships()
+        ↓
+small current graph
+```
+
+---
+
+# 13D.15 There is also a problem you should fix before 13E
+
+Your current output contains:
+
+```text
+out parent_of pid:47034
+in parent_of pid:1428
+
+out parent_of pid:47034
+in parent_of pid:1428
+
+out parent_of pid:47034
+in parent_of pid:1428
+...
+```
+
+This is exactly what 13D should solve.
+
+But notice that your `current_relationships()` rule:
+
+```python
+key = (
+    source_type,
+    source_id,
+    relationship_type,
+)
+```
+
+works nicely for:
+
+```text
+service → manages → process
+```
+
+but **does not necessarily model `parent_of` correctly** if a process can have multiple children.
+
+For example:
+
+```text
+pid:1
+  ├── parent_of → pid:43
+  ├── parent_of → pid:98
+  ├── parent_of → pid:180
+  └── parent_of → pid:209
+```
+
+You absolutely want to keep all four.
+
+So don't blindly apply "one latest target per source" to every relationship type.
+
+This is why I recommend we treat 13D as:
+
+### Phase 1
+
+Get the current graph concept working.
+
+### Phase 2
+
+Define which relationships are:
+
+**single-target**
+
+```text
+service → manages → process
+```
+
+versus:
+
+**multi-target**
+
+```text
+process → parent_of → child
+process → has_connection → connection
+```
+
+Then 13E can cleanly solve the repeated output without accidentally deleting legitimate relationships.
+
+---
+
+# Your 13D target
+
+At the end of 13D, you want these APIs:
+
+```python
+store.all_relationships()
+```
+
+means:
+
+```text
+ALL HISTORY
+```
+
+and:
+
+```python
+store.current_relationships()
+```
+
+means:
+
+```text
+CURRENT STATE
+```
+
+Then:
+
+```python
+graph.get_neighbors(...)
+```
+
+means:
+
+```text
+historical neighbors
+```
+
+while:
+
+```python
+graph.get_current_neighbors(...)
+```
+
+means:
+
+```text
+current neighbors
+```
+
+and:
+
+```python
+graph.traverse(...)
+```
+
+means:
+
+```text
+historical traversal
+```
+
+while:
+
+```python
+graph.traverse_current(...)
+```
+
+means:
+
+```text
+current machine graph
+```
+
+So the architecture becomes:
+
+```text
+                  SQLite
+                    │
+          ┌─────────┴─────────┐
+          ↓                   ↓
+ all_relationships()   current_relationships()
+          │                   │
+          ↓                   ↓
+ Historical Graph      Current Machine Graph
+          │                   │
+          ↓                   ↓
+ traverse()           traverse_current()
+```
+
+**That is the cleanest next step for your Galaxy architecture.**
+
+After this works, **13E should specifically address the duplicate/repeated graph output**, with special handling for multi-target relationships like `parent_of` and `has_connection`, rather than trying to solve those semantics prematurely inside 13D.
+
+
+
+Next: 13E
+The next milestone should formalize relationship cardinality:
+
+Relationship              Cardinality
+
+service → manages         single-target
+service → listens_on      potentially single/multi
+process → parent_of       multi-target
+process → has_connection  multi-target
+
+Then current_relationships() can apply the correct rule per relationship type instead of treating every relationship as (source + type) → one target.

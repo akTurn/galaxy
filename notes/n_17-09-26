@@ -1,0 +1,1967 @@
+Yes. Let's take **each Observation type in your current Galaxy code**, separate the fields, and explain **what each one means and why Galaxy collects it**.
+
+The easiest way to understand it is:
+
+> **Observation metadata tells Galaxy what/when/where the fact came from. `data` tells Galaxy the actual fact.**
+
+---
+
+# 1. Host Observation
+
+Your `SystemCollector` creates:
+
+```python
+Observation(
+    source="system",
+    entity_type="host",
+    entity_id="localhost",
+    timestamp=...,
+    data={
+        "cpu": ...,
+        "memory": ...,
+        "disk": ...,
+        "os": ...,
+        "os_version": ...,
+        "hostname": ...,
+        "uptime": ...,
+    }
+)
+```
+
+### Metadata
+
+| Field         | Example       | Why?                                                  |
+| ------------- | ------------- | ----------------------------------------------------- |
+| `source`      | `"system"`    | Tells Galaxy which collector produced the observation |
+| `entity_type` | `"host"`      | Says the observation is about the machine itself      |
+| `entity_id`   | `"localhost"` | Identifies which host                                 |
+| `timestamp`   | `2026-...`    | Tells Galaxy when the information was observed        |
+
+### Data
+
+| Data         | Meaning                               | Why Galaxy needs it                 |
+| ------------ | ------------------------------------- | ----------------------------------- |
+| `cpu`        | Current CPU utilization               | Detect CPU pressure and trends      |
+| `memory`     | Current memory utilization            | Detect memory pressure              |
+| `disk`       | Disk space utilization                | Detect disks approaching capacity   |
+| `os`         | Operating system                      | Understand the environment          |
+| `os_version` | OS/kernel version information         | Know the exact environment/version  |
+| `hostname`   | Machine hostname                      | Identify the machine                |
+| `uptime`     | How long the machine has been running | Understand machine history/restarts |
+
+So this observation basically says:
+
+```text
+"At this moment, this host looked like this."
+```
+
+---
+
+# 2. Process Observation
+
+Your process observation contains:
+
+```python
+data={
+    "pid": info["pid"],
+    "name": info["name"],
+    "cpu_percent": info["cpu_percent"],
+    "memory_percent": info["memory_percent"],
+    "status": info["status"],
+    "username": info["username"],
+    "parent_pid": info["ppid"],
+    "executable": info["exe"],
+    "command_line": info["cmdline"],
+    "create_time": info["create_time"],
+}
+```
+
+Let's separate them.
+
+### `pid`
+
+```text
+pid = 4217
+```
+
+The operating system's process ID.
+
+Why?
+
+```text
+Galaxy needs to identify the process
+```
+
+and later connect it with things such as:
+
+```text
+process → port
+process → parent process
+process → service
+```
+
+But you correctly recognized that **PID alone isn't a permanent identity**.
+
+---
+
+### `name`
+
+```text
+name = "python"
+```
+
+The process name.
+
+Why?
+
+Galaxy needs to know **what process it is** in a human-readable way.
+
+For example:
+
+```text
+PID 4217
+name = python
+```
+
+---
+
+### `cpu_percent`
+
+```text
+cpu_percent = 45.2
+```
+
+How much CPU the process is using.
+
+Why?
+
+This lets Galaxy observe behavior over time:
+
+```text
+10%
+15%
+20%
+50%
+90%
+```
+
+Later, Galaxy can recognize that the process's CPU usage changed significantly.
+
+---
+
+### `memory_percent`
+
+```text
+memory_percent = 8.3
+```
+
+Percentage of system memory being used by the process.
+
+Why?
+
+To understand memory consumption and changes over time.
+
+For example:
+
+```text
+python
+  memory = 2%
+  
+5 minutes later
+
+python
+  memory = 15%
+```
+
+That becomes useful historical information.
+
+---
+
+### `status`
+
+```text
+status = "running"
+```
+
+The current process state.
+
+For example:
+
+```text
+running
+sleeping
+stopped
+zombie
+```
+
+Why?
+
+CPU and memory alone don't tell Galaxy what the process is doing.
+
+Status gives additional context.
+
+---
+
+### `username`
+
+```text
+username = "alice"
+```
+
+The user account associated with the process.
+
+Why?
+
+It establishes:
+
+```text
+Process
+   ↓
+User
+```
+
+This becomes useful when Galaxy eventually builds relationships between entities.
+
+---
+
+### `parent_pid`
+
+```text
+parent_pid = 4000
+```
+
+The PID of the process that created/launched this process.
+
+Why?
+
+This lets Galaxy build a **process tree**.
+
+For example:
+
+```text
+systemd
+   │
+   └── nginx
+          │
+          └── worker
+```
+
+Or:
+
+```text
+python
+   │
+   └── subprocess
+```
+
+This is much more informative than seeing a flat list of PIDs.
+
+---
+
+### `executable`
+
+```text
+executable = "/usr/bin/python3"
+```
+
+The executable associated with the process.
+
+Why?
+
+The name:
+
+```text
+python
+```
+
+isn't enough to fully identify what is running.
+
+Galaxy can distinguish things such as:
+
+```text
+/usr/bin/python3
+/opt/app/venv/bin/python
+```
+
+---
+
+### `command_line`
+
+Example:
+
+```text
+command_line =
+"python /opt/myapp/server.py --port 8080"
+```
+
+Why?
+
+This can reveal **how the process was started**.
+
+It can connect several pieces:
+
+```text
+Process
+   │
+   ├── executable
+   ├── command line
+   └── port
+```
+
+For example, Galaxy may later be able to understand:
+
+```text
+python
+ └── server.py
+      └── --port 8080
+             │
+             ▼
+           :8080
+```
+
+---
+
+### `create_time`
+
+```text
+create_time = ...
+```
+
+When the process was created.
+
+This one is especially important for your `ProcessIdentity`.
+
+Suppose:
+
+```text
+12:00
+PID 4217 → python
+```
+
+The process exits.
+
+Later:
+
+```text
+13:00
+PID 4217 → nginx
+```
+
+The PID was reused.
+
+But:
+
+```text
+PID + create_time
+```
+
+can distinguish the two process instances.
+
+That's why this:
+
+```python
+ProcessIdentity.from_process(
+    info["pid"],
+    info["create_time"]
+)
+```
+
+is much stronger than:
+
+```python
+entity_id=f"pid:{info['pid']}"
+```
+
+---
+
+# 3. Listening Port Observation
+
+Your code:
+
+```python
+Observation(
+    source="network",
+    entity_type="listening_port",
+    entity_id=f"{protocol}:{address}:{port}",
+    timestamp=...,
+    data={
+        "protocol": protocol,
+        "local_address": address,
+        "local_port": port,
+        "pid": pid,
+        "status": connection.status,
+    }
+)
+```
+
+### `protocol`
+
+Example:
+
+```text
+TCP
+UDP
+```
+
+Why?
+
+Because:
+
+```text
+TCP :8080
+```
+
+and
+
+```text
+UDP :8080
+```
+
+are different network endpoints.
+
+---
+
+### `local_address`
+
+Example:
+
+```text
+127.0.0.1
+```
+
+or:
+
+```text
+0.0.0.0
+```
+
+Why?
+
+It tells Galaxy **which local network address the port is bound to**.
+
+This matters because:
+
+```text
+127.0.0.1:8080
+```
+
+and:
+
+```text
+0.0.0.0:8080
+```
+
+have different meanings.
+
+---
+
+### `local_port`
+
+Example:
+
+```text
+8080
+```
+
+Why?
+
+This identifies the network port being listened on.
+
+---
+
+### `pid`
+
+Example:
+
+```text
+4217
+```
+
+Why?
+
+This creates a potential relationship:
+
+```text
+Process 4217
+      │
+      ▼
+Listening on
+      │
+      ▼
+TCP :8080
+```
+
+This is one of the first examples of Galaxy moving toward **correlation**.
+
+---
+
+### `status`
+
+Example:
+
+```text
+LISTEN
+```
+
+Why?
+
+It tells Galaxy the state of the network socket.
+
+---
+
+# 4. Network Connection Observation
+
+Your code:
+
+```python
+Observation(
+    source="network",
+    entity_type="network_connection",
+    entity_id=...,
+    timestamp=...,
+    data={
+        "protocol": protocol,
+        "local_address": local_address,
+        "local_port": local_port,
+        "remote_address": remote_address,
+        "remote_port": remote_port,
+        "state": connection.status,
+        "pid": connection.pid,
+    }
+)
+```
+
+This describes an **active network connection**, rather than merely a listening port.
+
+### `protocol`
+
+```text
+TCP
+UDP
+```
+
+Why?
+
+Identifies the network protocol.
+
+---
+
+### `local_address`
+
+Example:
+
+```text
+192.168.1.10
+```
+
+The local side of the connection.
+
+---
+
+### `local_port`
+
+Example:
+
+```text
+5000
+```
+
+The local port.
+
+---
+
+### `remote_address`
+
+Example:
+
+```text
+142.250.x.x
+```
+
+The remote endpoint.
+
+Why?
+
+Now Galaxy can understand:
+
+```text
+local machine
+      │
+      ▼
+remote machine
+```
+
+---
+
+### `remote_port`
+
+Example:
+
+```text
+443
+```
+
+The remote port.
+
+Together:
+
+```text
+remote_address + remote_port
+```
+
+identifies the remote endpoint.
+
+---
+
+### `state`
+
+Example:
+
+```text
+ESTABLISHED
+```
+
+Why?
+
+It tells Galaxy the state of the connection.
+
+For TCP, for example:
+
+```text
+ESTABLISHED
+TIME_WAIT
+CLOSE_WAIT
+LISTEN
+...
+```
+
+---
+
+### `pid`
+
+Example:
+
+```text
+4217
+```
+
+This is extremely useful.
+
+It potentially gives:
+
+```text
+Process
+  │
+  ▼
+Network connection
+  │
+  ▼
+Remote endpoint
+```
+
+So Galaxy can eventually answer questions such as:
+
+> Which process owns this connection?
+
+---
+
+# 5. Network Interface Observation
+
+Your code creates:
+
+```python
+Observation(
+    source="network",
+    entity_type="network_interface",
+    entity_id=f"interface:{interface_name}",
+    timestamp=...,
+    data=interface_data
+)
+```
+
+The data contains:
+
+```text
+name
+addresses
+is_up
+speed
+mtu
+```
+
+---
+
+### `name`
+
+Example:
+
+```text
+eth0
+```
+
+or:
+
+```text
+wlan0
+```
+
+Why?
+
+Identifies the network interface.
+
+---
+
+### `addresses`
+
+You collect:
+
+```python
+{
+    "family": ...,
+    "address": ...,
+    "netmask": ...,
+    "broadcast": ...
+}
+```
+
+#### `family`
+
+Example:
+
+```text
+IPv4
+IPv6
+```
+
+Why?
+
+Tells Galaxy what type of network address it is.
+
+---
+
+#### `address`
+
+Example:
+
+```text
+192.168.1.20
+```
+
+Why?
+
+The IP address assigned to the interface.
+
+---
+
+#### `netmask`
+
+Example:
+
+```text
+255.255.255.0
+```
+
+Why?
+
+Provides information about the local network/subnet.
+
+---
+
+#### `broadcast`
+
+Example:
+
+```text
+192.168.1.255
+```
+
+Why?
+
+Describes the broadcast address where applicable.
+
+---
+
+### `is_up`
+
+Example:
+
+```text
+True
+```
+
+Why?
+
+Galaxy can determine whether the interface is currently operational.
+
+```text
+eth0
+  ↓
+is_up = False
+```
+
+is very different from:
+
+```text
+eth0
+  ↓
+is_up = True
+```
+
+---
+
+### `speed`
+
+Example:
+
+```text
+1000
+```
+
+Usually the interface speed in Mbps, depending on the underlying OS/API.
+
+Why?
+
+Provides information about the interface's reported link speed.
+
+---
+
+### `mtu`
+
+Example:
+
+```text
+1500
+```
+
+Maximum Transmission Unit.
+
+Why?
+
+It describes the maximum packet payload size supported at the interface level and can provide useful network configuration context.
+
+---
+
+# 6. Service Observation
+
+Your systemd observation:
+
+```python
+Observation(
+    source="systemd",
+    entity_type="service",
+    entity_id=f"service:{service_name}",
+    timestamp=now,
+    data={
+        "name": service_name,
+        "unit": unit,
+        "load_state": load_state,
+        "active_state": active_state,
+        "sub_state": sub_state,
+        "main_pid": main_pid,
+    },
+)
+```
+
+### `name`
+
+Example:
+
+```text
+nginx
+```
+
+Why?
+
+Human-readable service identity.
+
+---
+
+### `unit`
+
+Example:
+
+```text
+nginx.service
+```
+
+Why?
+
+This is the systemd unit associated with the service.
+
+It gives Galaxy the systemd-specific identity.
+
+---
+
+### `load_state`
+
+Example:
+
+```text
+loaded
+```
+
+Why?
+
+Describes whether systemd successfully loaded the unit.
+
+---
+
+### `active_state`
+
+Example:
+
+```text
+active
+inactive
+failed
+```
+
+Why?
+
+Tells Galaxy the high-level service state.
+
+---
+
+### `sub_state`
+
+Example:
+
+```text
+running
+dead
+exited
+```
+
+Why?
+
+Provides more detailed state information than `active_state`.
+
+For example:
+
+```text
+active_state = active
+sub_state = running
+```
+
+gives Galaxy more precise information.
+
+---
+
+### `main_pid`
+
+Example:
+
+```text
+4217
+```
+
+Why?
+
+This is extremely valuable because it connects:
+
+```text
+Service
+   │
+   ▼
+Main Process
+   │
+   ▼
+PID 4217
+```
+
+And Galaxy already has a Process Observation for PID 4217.
+
+That means your data is beginning to form a **relationship graph**.
+
+---
+
+# Putting everything together
+
+This is what you are really building.
+
+```text
+                         HOST
+                          │
+          ┌───────────────┼────────────────┐
+          │               │                │
+          ▼               ▼                ▼
+       PROCESS         SERVICE          NETWORK
+          │               │                │
+          │               │        ┌───────┼──────────┐
+          │               │        │       │          │
+          ▼               ▼        ▼       ▼          ▼
+       PID/ID          main_pid  INTERFACE PORT   CONNECTION
+          │                       │       │          │
+          │                       │       │          │
+          └──────────────┬────────┘       │          │
+                         │                │          │
+                         └────────────────┴──────────┘
+```
+
+The **Observations are the individual facts**:
+
+```text
+"Host CPU = 80%"
+
+"Process 4217 CPU = 50%"
+
+"Service nginx has main_pid = 4217"
+
+"Process 4217 executable = /usr/sbin/nginx"
+
+"Port 8080 belongs to PID 4217"
+
+"PID 4217 has connection to X:X"
+```
+
+Galaxy's future job is to **correlate those separate facts**.
+
+So don't think of `Observation` as the final machine model.
+
+Think:
+
+```text
+                 RAW FACTS
+                    │
+                    ▼
+              OBSERVATIONS
+                    │
+                    ▼
+                 STORAGE
+                    │
+                    ▼
+                 QUERIES
+                    │
+                    ▼
+              CORRELATION
+                    │
+                    ▼
+             MACHINE MODEL
+                    │
+                    ▼
+                 REASONING
+```
+
+And this is why your current Observation design is important: **you are establishing a consistent fact format before Galaxy starts trying to understand those facts.**
+
+
+Because **“network” is not one thing**. A machine's network state has several different kinds of entities.
+
+In your Galaxy design, the three network observation types answer three different questions:
+
+```text
+Network
+│
+├── 1. network_interface
+│      "What network hardware/interfaces does the machine have?"
+│
+├── 2. listening_port
+│      "What ports is the machine listening on?"
+│
+└── 3. network_connection
+       "What connections are currently happening?"
+```
+
+### 1. Network Interface
+
+Example:
+
+```text
+eth0
+IP: 192.168.1.20
+MTU: 1500
+UP: true
+```
+
+This describes the **network interface itself**.
+
+Think:
+
+> **What network interfaces exist on this machine?**
+
+```text
+Machine
+ └── eth0
+      ├── IP address
+      ├── MTU
+      ├── speed
+      └── up/down
+```
+
+---
+
+### 2. Listening Port
+
+Example:
+
+```text
+TCP
+0.0.0.0:8080
+PID: 4217
+LISTEN
+```
+
+This describes a **port waiting for connections**.
+
+Think:
+
+> **What is this machine offering/listening for?**
+
+```text
+Machine
+ └── Port 8080
+       └── Process 4217
+```
+
+For example, a web server might listen on port `8080`.
+
+---
+
+### 3. Network Connection
+
+Example:
+
+```text
+TCP
+192.168.1.20:5000
+       ↓
+142.250.x.x:443
+ESTABLISHED
+PID: 4217
+```
+
+This describes an **actual connection between two endpoints**.
+
+Think:
+
+> **Who is this machine communicating with right now?**
+
+```text
+Process 4217
+     │
+     ▼
+192.168.1.20:5000
+     │
+     ▼
+142.250.x.x:443
+```
+
+---
+
+## Why not put all three into one Observation?
+
+Because they are **different entities**.
+
+Consider a real machine:
+
+```text
+                    MACHINE
+                       │
+          ┌────────────┼─────────────┐
+          ▼            ▼             ▼
+       eth0          :8080          Connection
+          │            │             │
+       interface    listening       active
+```
+
+They also change independently.
+
+For example:
+
+```text
+13:00
+
+Interface:
+eth0 = UP
+
+Listening:
+:8080 = nginx
+
+Connection:
+nginx → 1.2.3.4:443
+```
+
+Later:
+
+```text
+13:05
+
+Interface:
+eth0 = UP
+
+Listening:
+:8080 = nginx
+
+Connection:
+nginx → 5.6.7.8:443
+```
+
+The interface didn't change, the listening port didn't change, but the connection changed.
+
+That's why keeping them separate makes Galaxy's data much cleaner.
+
+### The simplest mental model
+
+```text
+INTERFACE
+"What network door do I have?"
+
+       ↓
+
+LISTENING PORT
+"What service is waiting at the door?"
+
+       ↓
+
+CONNECTION
+"Who is currently communicating through it?"
+```
+
+And eventually Galaxy can **correlate all three**:
+
+```text
+eth0
+ │
+ └── 192.168.1.20
+          │
+          └── :8080
+                │
+                └── Process 4217
+                       │
+                       └── connection
+                              │
+                              └── remote:443
+```
+
+That's the reason your NetworkCollector has three observation types: **they represent three different levels of network information, not three arbitrary versions of the same data.**
+
+
+Yes, but **I would not add more network observation types yet**.
+
+For the architecture you're building, these three cover the essential **host-level network state**:
+
+```text
+Network
+├── network_interface
+├── listening_port
+└── network_connection
+```
+
+There are a few additional network data points that can become useful later.
+
+### 1. Interface statistics
+
+You currently collect interface configuration:
+
+```text
+interface
+├── name
+├── addresses
+├── is_up
+├── speed
+└── mtu
+```
+
+You could eventually collect traffic statistics:
+
+```text
+rx_bytes
+tx_bytes
+rx_packets
+tx_packets
+rx_errors
+tx_errors
+rx_dropped
+tx_dropped
+```
+
+This answers:
+
+> How much traffic is going through the interface, and are there errors?
+
+For example:
+
+```text
+eth0
+  rx_bytes   = 10 GB
+  tx_bytes   = 2 GB
+  rx_errors  = 0
+  tx_errors  = 0
+```
+
+**This is probably the next network data I would consider**, but it can wait.
+
+---
+
+### 2. Routing information
+
+Eventually Galaxy could observe the routing table:
+
+```text
+route
+├── destination
+├── gateway
+├── interface
+└── metric
+```
+
+This answers:
+
+> **Where will the machine send traffic?**
+
+For example:
+
+```text
+0.0.0.0/0
+    ↓
+gateway 192.168.1.1
+    ↓
+eth0
+```
+
+This becomes useful when diagnosing connectivity problems.
+
+---
+
+### 3. DNS configuration
+
+Eventually:
+
+```text
+dns
+├── nameserver
+├── search_domains
+└── configuration
+```
+
+This answers:
+
+> **How does this machine resolve domain names?**
+
+Useful for problems such as:
+
+```text
+Application
+   ↓
+DNS lookup
+   ↓
+FAIL
+```
+
+---
+
+### 4. ARP / Neighbor information
+
+On IPv4/IPv6 systems, Galaxy could eventually observe neighbors:
+
+```text
+neighbor
+├── IP
+├── MAC
+├── interface
+└── state
+```
+
+For example:
+
+```text
+192.168.1.1
+    ↓
+AA:BB:CC:DD:EE:FF
+    ↓
+eth0
+```
+
+This is useful for understanding the local network.
+
+---
+
+# But don't add all of these now
+
+I'd keep **Milestone 10** deliberately small:
+
+```text
+M10 Network Intelligence
+│
+├── network_interface
+│   ├── addresses
+│   ├── is_up
+│   ├── speed
+│   └── mtu
+│
+├── listening_port
+│   ├── protocol
+│   ├── address
+│   ├── port
+│   ├── pid
+│   └── status
+│
+└── network_connection
+    ├── protocol
+    ├── local endpoint
+    ├── remote endpoint
+    ├── state
+    └── pid
+```
+
+Then later you can expand:
+
+```text
+Network Intelligence
+│
+├── Interface
+├── Interface Statistics
+├── Listening Port
+├── Connection
+├── Routing
+├── DNS
+└── Neighbor
+```
+
+### Most importantly
+
+Don't create an observation just because the operating system exposes some piece of information.
+
+Create it when the information helps Galaxy answer a meaningful question.
+
+For example:
+
+```text
+Interface       → What network interfaces exist?
+Port            → What is listening?
+Connection      → Who is communicating?
+Statistics      → How much traffic/errors?
+Routing         → Where does traffic go?
+DNS             → How are names resolved?
+Neighbor        → Who is on the local network?
+```
+
+So **your current three are a good foundation for Milestone 10**. I would finish the observation pipeline, storage/querying, identity, and correlation before expanding NetworkCollector further.
+
+
+
+s
+
+
+
+Mostly **yes**, but there is one important distinction:
+
+### Your observations can have duplicates — and that's okay
+
+Every collection cycle intentionally stores another observation:
+
+```text
+10:00  pid:39038@A  cpu=5%
+10:01  pid:39038@A  cpu=8%
+10:02  pid:39038@A  cpu=3%
+```
+
+These are **not duplicate processes**.
+
+They are:
+
+> 3 observations of the same process at different times.
+
+Your `entity_id`:
+
+```text
+pid:39038@A
+```
+
+identifies the same process across those observations.
+
+### Your lifecycle events should NOT repeat unnecessarily
+
+The tracker does:
+
+```text
+previous       current
+
+A              A       → running
+A              A       → running
+A              A       → running
+A              B       → A exited, B started
+```
+
+So for one process:
+
+```text
+process_started   ← once when first seen
+process_exited    ← once when it disappears
+```
+
+### Your current test proves the identity part
+
+You have:
+
+```text
+PID 39038 + create_time A
+        ↓
+pid:39038@A
+```
+
+If the PID gets reused:
+
+```text
+PID 39038 + create_time B
+        ↓
+pid:39038@B
+```
+
+Those are correctly treated as **different processes**.
+
+### One caveat
+
+Your `ProcessLifecycleTracker` itself only remembers the **previous scan**. If your program restarts, it forgets everything:
+
+```text
+program running
+    ↓
+previous_processes = {...}
+
+program stops
+    ↓
+memory lost
+
+program starts again
+    ↓
+previous_processes = set()
+```
+
+So after restart, all currently observed processes will look `started` again.
+
+That's not necessarily a bug; it's something you'll address when you make lifecycle/history persistent.
+
+**So at your current stage: the architecture is working correctly.** Raw observations repeat by design; process identities and lifecycle events are what distinguish the actual process lifecycle.
+
+
+
+Yes — these are **two different ways of modeling the same journal information**. The confusion is mainly that the first list is a *conceptual LogEvent model*, while the second is *raw fields returned by the journal*.
+
+I would separate them like this:
+
+### 1. Raw journal data
+
+The journal can give you fields such as:
+
+```text
+timestamp
+message
+priority
+hostname
+unit
+pid
+uid
+```
+
+These are **what the collector receives**.
+
+### 2. Your `LogEvent`
+
+Your application can normalize those into:
+
+```text
+LogEvent
+├── timestamp
+├── source
+├── severity
+├── message
+├── process
+└── event_id
+```
+
+These are **what Galaxy wants to understand**.
+
+For example:
+
+```text
+Journal
+────────────────────────
+MESSAGE  = "Started nginx"
+PRIORITY = 6
+HOSTNAME = "marshall"
+_SYSTEMD_UNIT = "nginx.service"
+_PID = 249
+_UID = 0
+__REALTIME_TIMESTAMP = ...
+
+
+             ↓ normalize
+
+
+LogEvent
+────────────────────────
+timestamp = ...
+source    = "journal"
+severity  = "info"
+message   = "Started nginx"
+process   = "pid:249@..."
+event_id  = "..."
+```
+
+### But there's an important question: should you create `LogEvent`?
+
+Given your current architecture, **I would not create a separate `LogEvent` dataclass yet**.
+
+You already have:
+
+```python
+Observation(
+    source=...,
+    entity_type=...,
+    entity_id=...,
+    timestamp=...,
+    data=...
+)
+```
+
+So simply do:
+
+```python
+Observation(
+    source="journal",
+    entity_type="log_event",
+    entity_id=event_id,
+    timestamp=timestamp,
+    data={
+        "message": message,
+        "priority": priority,
+        "hostname": hostname,
+        "unit": unit,
+        "pid": pid,
+        "uid": uid,
+    },
+)
+```
+
+This keeps your architecture consistent:
+
+```text
+Process
+    → Observation
+
+Service
+    → Observation
+
+Network
+    → Observation
+
+Log event
+    → Observation
+```
+
+And the raw journal-specific information stays inside `data`.
+
+### What about `severity` vs `priority`?
+
+Don't throw away `priority`.
+
+Journal gives you a numeric priority. You can later interpret it:
+
+```text
+0 → emergency
+1 → alert
+2 → critical
+3 → error
+4 → warning
+5 → notice
+6 → informational
+7 → debug
+```
+
+So initially store:
+
+```python
+"priority": priority
+```
+
+and later derive:
+
+```python
+"severity": "error"
+```
+
+if you actually need that normalized concept.
+
+### What about `process` vs `pid`?
+
+Same idea.
+
+Raw:
+
+```python
+"pid": 249
+```
+
+Your existing process identity:
+
+```text
+pid:249@178...
+```
+
+can later be used to connect the log to a specific process.
+
+So I would **not put `process` into the first collector unless you can reliably construct the process identity**.
+
+---
+
+### Therefore, for your current Galaxy architecture
+
+Use:
+
+```text
+Log observation
+├── timestamp       ← Observation.timestamp
+├── source          ← "journal"
+├── entity_type     ← "log_event"
+├── entity_id       ← journal event ID
+└── data
+    ├── message
+    ├── priority
+    ├── hostname
+    ├── unit
+    ├── pid
+    └── uid
+```
+
+This is the cleanest fit with what you've already built.
+
+**Raw data first → normalized meaning later.**
+
+That is especially useful because your later correlation engine can use `unit`, `pid`, `message`, and `priority` to connect a log event to your existing **service and process observations**.
+
+
+
+Great. Let's make the `LogCollector` **incremental** now.
+
+The key idea is simple:
+
+```text
+First collection
+    ↓
+journalctl -n 100
+    ↓
+A B C D E
+        ↑
+      cursor
+
+Next collection
+    ↓
+journalctl --after-cursor <cursor>
+    ↓
+F G H
+```
+
+### Step 1 — Update `collectors/log.py`
+
+Replace the current `collect()` method with this version. The rest of the helper methods can stay as they are.
+
+```python
+def collect(self) -> list[Observation]:
+
+    command = [
+        "journalctl",
+        "--no-pager",
+        "-o",
+        "json",
+    ]
+
+    if self.last_cursor is None:
+        command.extend([
+            "-n",
+            "100",
+        ])
+    else:
+        command.extend([
+            "--after-cursor",
+            self.last_cursor,
+        ])
+
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    observations = []
+
+    for line in result.stdout.splitlines():
+
+        if not line.strip():
+            continue
+
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        cursor = entry.get("__CURSOR")
+
+        if not cursor:
+            continue
+
+        timestamp = self._parse_timestamp(
+            entry.get("__REALTIME_TIMESTAMP")
+        )
+
+        message = self._parse_message(
+            entry.get("MESSAGE")
+        )
+
+        observations.append(
+            Observation(
+                source="journald",
+                entity_type="log",
+                entity_id=f"journal:{cursor}",
+                timestamp=timestamp,
+                data={
+                    "message": message,
+                    "priority": self._to_int(
+                        entry.get("PRIORITY")
+                    ),
+                    "service": entry.get(
+                        "_SYSTEMD_UNIT"
+                    ),
+                    "pid": self._to_int(
+                        entry.get("_PID")
+                    ),
+                    "process": entry.get(
+                        "_COMM"
+                    ),
+                    "executable": entry.get(
+                        "_EXE"
+                    ),
+                    "hostname": entry.get(
+                        "_HOSTNAME"
+                    ),
+                    "identifier": entry.get(
+                        "SYSLOG_IDENTIFIER"
+                    ),
+                },
+            )
+        )
+
+    if observations:
+        self.last_cursor = (
+            observations[-1].entity_id.removeprefix(
+                "journal:"
+            )
+        )
+
+    return observations
+```
+
+But we also need one small addition to the class.
+
+At the beginning of `LogCollector`, add:
+
+```python
+class LogCollector(Collector):
+
+    def __init__(self):
+        self.last_cursor = None
+```
+
+So the class becomes:
+
+```python
+class LogCollector(Collector):
+
+    def __init__(self):
+        self.last_cursor = None
+
+    def collect(self) -> list[Observation]:
+        ...
+```
+
+### Why `last_cursor` belongs to the collector
+
+The collector now has a tiny amount of state:
+
+```text
+LogCollector
+    │
+    └── last_cursor
+```
+
+Initially:
+
+```text
+last_cursor = None
+```
+
+After the first collection:
+
+```text
+last_cursor = "s=...;i=..."
+```
+
+On the next collection, that cursor is passed to `journalctl`.
+
+---
+
+## Step 2 — Test it
+
+Run this from `~/galaxy`:
+
+```bash
+python -c "from collectors.log import LogCollector; c = LogCollector(); a = c.collect(); print('First:', len(a)); print('Cursor:', c.last_cursor); b = c.collect(); print('Second:', len(b))"
+```
+
+We're looking for something like:
+
+```text
+First: 100
+Cursor: s=...;i=...
+Second: 0
+```
+
+The second result may be greater than zero if new journal entries were generated between the two calls. That's fine.
+
+The important thing is that the **same 100 entries should not be returned again**.
+
+### One important limitation
+
+This cursor is currently **memory-only**.
+
+If Galaxy stops:
+
+```text
+Galaxy running
+    ↓
+cursor remembered
+    ↓
+Galaxy stops
+    ↓
+process memory disappears
+```
+
+When Galaxy starts again:
+
+```text
+last_cursor = None
+```
+
+and it will collect the last 100 entries again.
+
+That's okay for this step.
+
+After we verify incremental collection works, the next architectural step will be:
+
+```text
+LogCollector
+     ↓
+cursor
+     ↓
+SQLite
+     ↓
+Galaxy restarts
+     ↓
+restore cursor
+     ↓
+continue from exactly where it stopped
+```
+
+That will make the log collector **restart-safe**.
+
