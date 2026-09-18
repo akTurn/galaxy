@@ -3,10 +3,12 @@ from collectors.system import SystemCollector
 from collectors.process import ProcessCollector
 from collectors.network import NetworkCollector
 from collectors.service import ServiceCollector
+from collectors.log import LogCollector
 from core.storage.sqlite_store import SQLiteStore
 from core.relationships.process import process_relationships
 from core.relationships.network import network_relationships
 from core.relationships.service import service_relationships
+from core.relationships.log import log_relationships
 from core.graph.process_identity_map import ProcessIdentityMap
 from core.graph.process_lifecycle import ProcessLifecycleTracker
 from core.models.lifecycle_event import LifecycleEvent
@@ -22,6 +24,7 @@ class Orchestrator:
             ProcessCollector(),
             NetworkCollector(),
             ServiceCollector(),
+            LogCollector(),
 
         ]
         self.store = SQLiteStore()
@@ -145,11 +148,38 @@ class Orchestrator:
             if observation.entity_type == "service"
         ]
 
+        service_map = {
+            observation.entity_id: observation
+            for observation in service_observations
+        }
+
         for observation in service_observations:
 
             relationships = service_relationships(
                 observation,
                 identity_map
+            )
+
+            all_relationships.extend(
+                relationships
+            )
+
+        # -------------------------
+        # 8. Log relationships
+        # -------------------------
+
+        log_observations = [
+            observation
+            for observation in all_observations
+            if observation.entity_type == "log"
+        ]
+
+        for observation in log_observations:
+
+            relationships = log_relationships(
+                observation,
+                identity_map,
+                service_map
             )
 
             all_relationships.extend(

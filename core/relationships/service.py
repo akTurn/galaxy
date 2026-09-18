@@ -22,7 +22,10 @@ def service_relationships(
 
     data = service_observation.data
 
-    main_pid = data.get("main_pid")
+    runtime = data.get("runtime", {})
+    main_pid = runtime.get("main_pid")
+
+    #main_pid = data.get("main_pid")
 
     if not main_pid:
         return relationships

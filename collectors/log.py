@@ -1,5 +1,6 @@
 import json
 import subprocess
+import hashlib
 
 from datetime import datetime, timezone
 
@@ -74,6 +75,7 @@ class LogCollector(Collector):
 
 
         observations = []
+        
 
         for line in result.stdout.splitlines():
 
@@ -90,6 +92,8 @@ class LogCollector(Collector):
             if not cursor:
                 continue
 
+            
+
             timestamp = self._parse_timestamp(
                 entry.get("__REALTIME_TIMESTAMP")
             )
@@ -98,13 +102,20 @@ class LogCollector(Collector):
                 entry.get("MESSAGE")
             )
 
+            #Keep entity_id short and Galaxy-oriented. Keep the full journald cursor as metadata and later as collector state.
+            log_id = hashlib.sha256(
+                cursor.encode("utf-8")
+            ).hexdigest()[:16]
+
             observations.append(
                 Observation(
                     source="journald",
                     entity_type="log",
-                    entity_id=f"journal:{cursor}",
+                    #entity_id=f"journal:{cursor}",
+                    entity_id=f"log:{log_id}",
                     timestamp=timestamp,
                     data={
+                        "journal_cursor": cursor,
                         "message": message,
                         "priority": self._to_int(
                             entry.get("PRIORITY")
@@ -130,6 +141,31 @@ class LogCollector(Collector):
                     },
                 )
             )
+
+
+        # if observations:
+        #     self.last_cursor = (
+        #         observations[-1].entity_id.removeprefix(
+        #             "journal:"
+        #         )
+        #     )
+            # journal entry
+            #     ↓
+            # cursor = entry["__CURSOR"]
+            #     ↓
+            # create log_id from cursor
+            #     ↓
+            # store cursor in data["journal_cursor"]
+            #     ↓
+            # create Observation
+            #     ↓
+            # after loop:
+            #     ↓
+            # self.last_cursor = last observation's journal_cursor
+
+            
+        if observations:
+            self.last_cursor = observations[-1].data["journal_cursor"]
 
         return observations
 
