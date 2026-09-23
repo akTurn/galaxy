@@ -43,8 +43,11 @@ def log_relationships(
     if service is None:
         return relationships
 
+    # service_entity_id = (
+    #     f"service:{service.removesuffix('.service')}"
+    # )
     service_entity_id = (
-        f"service:{service.removesuffix('.service')}"
+    service.removesuffix(".service")
     )
 
     if service_entity_id not in service_map:

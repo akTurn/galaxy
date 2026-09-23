@@ -112,7 +112,7 @@ class LogCollector(Collector):
                     source="journald",
                     entity_type="log",
                     #entity_id=f"journal:{cursor}",
-                    entity_id=f"log:{log_id}",
+                    entity_id=log_id,
                     timestamp=timestamp,
                     data={
                         "journal_cursor": cursor,

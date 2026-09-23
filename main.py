@@ -39,19 +39,19 @@ def main():
             # Read services from storage
             # ----------------------------------------
 
-            services = [
+            logs = [
                 observation
                 for observation in store.all()
-                if observation.entity_type == "service"
+                if observation.entity_type == "log"
             ]
 
-            print("Services stored:", len(services))
+            print("Logs stored:", len(logs))
 
-            for service in services[:10]:
+            for log in logs[:10]:
 
                 print(
-                    service.entity_id,
-                    service.data
+                    log.entity_id,
+                    log.data
                 )
 
             # ----------------------------------------

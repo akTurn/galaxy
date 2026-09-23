@@ -9,6 +9,7 @@ from core.relationships.process import process_relationships
 from core.relationships.network import network_relationships
 from core.relationships.service import service_relationships
 from core.relationships.log import log_relationships
+from core.relationships.application import application_relationships
 from core.graph.process_identity_map import ProcessIdentityMap
 from core.graph.process_lifecycle import ProcessLifecycleTracker
 from core.models.lifecycle_event import LifecycleEvent
@@ -116,8 +117,31 @@ class Orchestrator:
                 relationships
             )
 
+
         # -------------------------
-        # 6. Network relationships
+        # 6. Application relationships
+        # -------------------------
+
+        service_observations = [
+                    observation
+                    for observation in all_observations
+                    if observation.entity_type == "service"
+                ]
+        
+
+        applications, application_relationships_list = (
+            application_relationships(
+                process_observations,
+                service_observations
+            )
+        )
+
+        all_relationships.extend(
+            application_relationships_list
+        )
+
+        # -------------------------
+        # 7. Network relationships
         # -------------------------
 
         for observation in all_observations:
@@ -139,15 +163,10 @@ class Orchestrator:
                 relationships
             )
         # -------------------------
-        # 7.Service relationships
+        # 8.Service relationships
         # -------------------------
 
-        service_observations = [
-            observation
-            for observation in all_observations
-            if observation.entity_type == "service"
-        ]
-
+        
         service_map = {
             observation.entity_id: observation
             for observation in service_observations
@@ -165,7 +184,7 @@ class Orchestrator:
             )
 
         # -------------------------
-        # 8. Log relationships
+        # 9. Log relationships
         # -------------------------
 
         log_observations = [
@@ -188,7 +207,7 @@ class Orchestrator:
 
 
         # -------------------------
-        # 8. Save relationships
+        # 10. Save relationships
         # -------------------------
 
         self.store.save_relationships(

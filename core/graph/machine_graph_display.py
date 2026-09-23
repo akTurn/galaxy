@@ -81,6 +81,31 @@ class MachineGraphDisplay:
         print(f"Sources: {len(grouped)}")
         print(f"Relationships: {relationship_count}")
 
+
+    def _display_relationship_type(self, relationship_type, direction):
+        if direction == "out":
+            return relationship_type
+
+        inverse_relationships = {
+            "parent_of": "child_of",
+            "runs": "run_by",
+            "manages": "managed_by",
+            "generated_by": "generates",
+            "associated_with": "associated_with",
+            "listens_on": "listened_on_by",
+            "has_connection": "connection_of",
+        }
+
+        return inverse_relationships.get(
+            relationship_type,
+            relationship_type,
+        )
+
+
+
+
+
+
     def traverse_relationships(
         self,
         store,
@@ -136,10 +161,26 @@ class MachineGraphDisplay:
             source = f"{source_type}:{source_id}"
             target = f"{target_type}:{target_id}"
 
+            # graph.setdefault(source, []).append(
+            #     {
+            #         "type": relationship_type,
+            #         "target": target,
+            #     }
+            # )
+
             graph.setdefault(source, []).append(
                 {
                     "type": relationship_type,
                     "target": target,
+                    "direction": "out",
+                }
+            )
+
+            graph.setdefault(target, []).append(
+                {
+                    "type": relationship_type,
+                    "target": source,
+                    "direction": "in",
                 }
             )
 
@@ -181,14 +222,33 @@ class MachineGraphDisplay:
                 ),
             ):
 
-                relationship_type = relationship["type"]
+                #relationship_type = relationship["type"]
+                relationship_type = self._display_relationship_type(
+                    relationship["type"],
+                    relationship["direction"],
+                )
+
                 target = relationship["target"]
+                direction = relationship["direction"]
+                target = relationship["target"]
+                direction = relationship["direction"]
+
+                if direction == "out":
+                    arrow = f"── {relationship_type} ──>"
+                else:
+                    arrow = f"<── {relationship_type} ──"
 
                 print(
                     f"{indent}  └── "
-                    f"{relationship_type} ──> "
+                    f"{arrow} "
                     f"{target}"
                 )
+
+                # print(
+                #     f"{indent}  └── "
+                #     f"{relationship_type} ──> "
+                #     f"{target}"
+                # )
 
                 walk(target, depth + 1)
 

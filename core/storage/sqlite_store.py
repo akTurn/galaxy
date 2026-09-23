@@ -133,14 +133,6 @@ class SQLiteStore:
         return self._row_to_observation(row)
 
 
-       # return cursor.fetchone()
-
-#     Eventually ll change the method so it can filter:
-
-# store.latest(
-#     entity_type="host",
-#     entity_id="localhost"
-# )
 
     def find_by_entity(self, entity_type, entity_id):
         cursor = self.conn.execute(
@@ -155,6 +147,64 @@ class SQLiteStore:
         )
 
         #return cursor.fetchall()
+        return [
+            self._row_to_observation(row)
+            for row in cursor.fetchall()
+        ]
+
+
+
+    def latest_observations_by_entity_type(self, entity_type):
+
+        cursor = self.conn.execute(
+            """
+            SELECT
+                source,
+                entity_type,
+                entity_id,
+                timestamp,
+                data
+            FROM observations
+            WHERE entity_type = ?
+            AND id IN (
+                SELECT MAX(id)
+                FROM observations
+                WHERE entity_type = ?
+                GROUP BY entity_id
+            )
+            ORDER BY id ASC
+            """,
+            (entity_type, entity_type),
+        )
+
+        return [
+            self._row_to_observation(row)
+            for row in cursor.fetchall()
+        ]
+
+
+    def latest_process_observations(self):
+
+        cursor = self.conn.execute(
+            """
+            SELECT
+                source,
+                entity_type,
+                entity_id,
+                timestamp,
+                data
+            FROM observations
+            WHERE entity_type = ?
+            AND timestamp = (
+                SELECT MAX(timestamp)
+                FROM observations
+                WHERE entity_type = ?
+            )
+            ORDER BY id ASC
+            """,
+            ("process", "process"),
+        )
+
         return [
             self._row_to_observation(row)
             for row in cursor.fetchall()
@@ -366,71 +416,66 @@ class SQLiteStore:
         return cursor.fetchall()
 
 
-    # def current_relationshipsold(self):
-    # cursor = self.conn.execute(
-    #     """
-    #     SELECT
-    #         r.source_entity_type,
-    #         r.source_entity_id,
-    #         r.relationship_type,
-    #         r.target_entity_type,
-    #         r.target_entity_id,
-    #         r.timestamp
-    #     FROM relationships r
-    #     INNER JOIN (
-    #         SELECT
-    #             source_entity_type,
-    #             source_entity_id,
-    #             relationship_type,
-    #             target_entity_type,
-    #             target_entity_id,
-    #             MAX(timestamp) AS latest_timestamp
-    #         FROM relationships
-    #         GROUP BY
-    #             source_entity_type,
-    #             source_entity_id,
-    #             relationship_type,
-    #             target_entity_type,
-    #             target_entity_id
-    #     ) latest
-    #     ON r.source_entity_type = latest.source_entity_type
-    #     AND r.source_entity_id = latest.source_entity_id
-    #     AND r.relationship_type = latest.relationship_type
-    #     AND r.target_entity_type = latest.target_entity_type
-    #     AND r.target_entity_id = latest.target_entity_id
-    #     AND r.timestamp = latest.latest_timestamp
-    #     ORDER BY r.id ASC
-    #     """
-    # )
-
-    # return cursor.fetchall()
-
-
-# def current_relationships1edit(self):
-#     relationships = self.all_relationships()
-
-#     latest = {}
-
-#     for relationship in relationships:
-
-#         source_type = relationship[0]
-#         source_id = relationship[1]
-#         relationship_type = relationship[2]
-#         target_type = relationship[3]
-#         target_id = relationship[4]
-#         timestamp = relationship[5]
-
-#         key = (
-#             source_type,
-#             source_id,
-#             relationship_type,
-#         )
-
-#         latest[key] = relationship
-
-#     return list(latest.values())
-
     def current_relationships(self):
+
+        relationships = self.all_relationships()
+
+        current_processes = self.latest_process_observations()
+
+        current_process_ids = {
+            observation.entity_id
+            for observation in current_processes
+        }
+
+        latest = {}
+
+        for relationship in relationships:
+
+            source_type = relationship[0]
+            source_id = relationship[1]
+            relationship_type = relationship[2]
+            target_type = relationship[3]
+            target_id = relationship[4]
+
+            # --------------------------------
+            # Ignore historical process relationships
+            # --------------------------------
+
+            if relationship_type != "generated_by":
+
+                if source_type == "process":
+                    if source_id not in current_process_ids:
+                        continue
+
+                if target_type == "process":
+                    if target_id not in current_process_ids:
+                        continue
+
+            # --------------------------------
+            # Keep latest occurrence of each edge
+            # --------------------------------
+
+            key = (
+                source_type,
+                source_id,
+                relationship_type,
+                target_type,
+                target_id,
+            )
+
+            existing = latest.get(key)
+
+            if existing is None:
+                latest[key] = relationship
+                continue
+
+            if relationship[5] > existing[5]:
+                latest[key] = relationship
+
+        return list(latest.values())
+
+
+    def current_relationshipsOld(self):
 
         relationships = self.all_relationships()
 
@@ -438,10 +483,18 @@ class SQLiteStore:
 
         for relationship in relationships:
 
+            # key = (
+            #     relationship[0],  # source type
+            #     relationship[1],  # source id
+            #     relationship[2],  # relationship type
+            # )
+
             key = (
                 relationship[0],  # source type
                 relationship[1],  # source id
                 relationship[2],  # relationship type
+                relationship[3],  # target type
+                relationship[4],  # target id
             )
 
             existing = latest.get(key)

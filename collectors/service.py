@@ -65,7 +65,7 @@ class ServiceCollector(Collector):
                 Observation(
                     source="systemd",
                     entity_type="service",
-                    entity_id=f"service:{service_name}",
+                    entity_id=service_name,
                     timestamp=now,
                     # data={
                     #     "name": service_name,
