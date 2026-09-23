@@ -4,12 +4,19 @@ from collectors.process import ProcessCollector
 from collectors.network import NetworkCollector
 from collectors.service import ServiceCollector
 from collectors.log import LogCollector
+from collectors.database.database import DatabaseManager
 from core.storage.sqlite_store import SQLiteStore
 from core.relationships.process import process_relationships
 from core.relationships.network import network_relationships
 from core.relationships.service import service_relationships
 from core.relationships.log import log_relationships
 from core.relationships.application import application_relationships
+from core.relationships.database import (
+    database_session_relationships,
+    database_service_relationships,
+    database_process_relationships,
+    application_database_relationships,
+)
 from core.graph.process_identity_map import ProcessIdentityMap
 from core.graph.process_lifecycle import ProcessLifecycleTracker
 from core.models.lifecycle_event import LifecycleEvent
@@ -26,6 +33,7 @@ class Orchestrator:
             NetworkCollector(),
             ServiceCollector(),
             LogCollector(),
+            DatabaseManager(),
 
         ]
         self.store = SQLiteStore()
@@ -204,6 +212,73 @@ class Orchestrator:
             all_relationships.extend(
                 relationships
             )
+
+        # -------------------------
+        # 10. Database relationships
+        # -------------------------
+
+        database_observations = [
+            observation
+            for observation in all_observations
+            if observation.entity_type == "database"
+        ]
+
+
+        database_connection_observations = [
+            observation
+            for observation in all_observations
+            if observation.entity_type == "database_connection"
+        ]
+
+
+        # Database → Connection
+
+        for database in database_observations:
+
+            relationships = database_session_relationships(
+                database,
+                database_connection_observations
+            )
+
+            all_relationships.extend(
+                relationships
+            )
+
+
+        # Service → Database
+
+        relationships = database_service_relationships(
+            service_observations,
+            database_observations
+        )
+
+        all_relationships.extend(
+            relationships
+        )
+
+
+        # Process → Database
+
+        process_db_relationships = database_process_relationships(
+            process_observations,
+            database_observations
+        )
+
+        all_relationships.extend(
+            process_db_relationships
+        )
+
+
+        # Application → Database
+
+        relationships = application_database_relationships(
+            application_relationships_list,
+            process_db_relationships
+        )
+
+        all_relationships.extend(
+            relationships
+        )
 
 
         # -------------------------

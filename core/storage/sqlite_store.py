@@ -4,6 +4,7 @@ from datetime import datetime
 
 from core.models.observation import Observation
 from core.models.relationship import Relationship
+from core.identity.application_identity import build_application_identity
 
 
 class SQLiteStore:
@@ -427,6 +428,17 @@ class SQLiteStore:
             for observation in current_processes
         }
 
+        current_process_applications = {
+            observation.entity_id: build_application_identity(
+                observation.data
+            )
+            for observation in current_processes
+        }
+
+        current_application_ids = set(
+            current_process_applications.values()
+        )
+
         latest = {}
 
         for relationship in relationships:
@@ -437,6 +449,27 @@ class SQLiteStore:
             target_type = relationship[3]
             target_id = relationship[4]
 
+
+            if (
+                source_type == "application"
+                and relationship_type == "runs"
+                and target_type == "process"
+            ):
+                current_application_id = (
+                    current_process_applications.get(target_id)
+                )
+
+                if current_application_id != source_id:
+                    continue
+
+
+            if (
+                source_type == "application"
+                and relationship_type == "associated_with"
+                and target_type == "service"
+            ):
+                if source_id not in current_application_ids:
+                    continue
             # --------------------------------
             # Ignore historical process relationships
             # --------------------------------

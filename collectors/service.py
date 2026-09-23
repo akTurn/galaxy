@@ -95,7 +95,60 @@ class ServiceCollector(Collector):
 
         return observations
 
+
     def _get_main_pids(self) -> dict[str, int | None]:
+
+        result = subprocess.run(
+            [
+                "systemctl",
+                "show",
+                "--type=service",
+                "--property=Id,MainPID",
+                "--no-pager",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        main_pids = {}
+
+        current_unit = None
+        current_pid = None
+
+        for line in result.stdout.splitlines():
+
+            line = line.strip()
+
+            if not line:
+                continue
+
+            if line.startswith("Id="):
+                current_unit = line[3:]
+
+            elif line.startswith("MainPID="):
+                value = line[8:]
+
+                try:
+                    current_pid = int(value)
+                except ValueError:
+                    current_pid = None
+
+            # Once we have both pieces of information,
+            # store the mapping.
+            if current_unit is not None and current_pid is not None:
+
+                if current_pid == 0:
+                    current_pid = None
+
+                main_pids[current_unit] = current_pid
+
+                current_unit = None
+                current_pid = None
+
+        return main_pids
+
+    def _get_main_pidsOld(self) -> dict[str, int | None]:
 
         """
         Fetch MainPID for all systemd services in one subprocess call.
