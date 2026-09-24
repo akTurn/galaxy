@@ -1,0 +1,845 @@
+Good. We have reached an important architecture point in Galaxy. Let's clarify the design before continuing.
+
+You asked:
+
+> if query lock need to see the table like change or its only need db server
+
+The answer: **both are useful, but they represent different layers.**
+
+Think of Galaxy's database model like this:
+
+```
+DATABASE SERVER
+      |
+      |
+      +---- DATABASE
+              |
+              |
+              +---- CONNECTION
+              |
+              +---- QUERY
+              |
+              +---- LOCK
+              |
+              +---- TABLE
+              |
+              +---- INDEX
+```
+
+Each collector has a different responsibility.
+
+### Current status
+
+You already have:
+
+✅ Database
+
+```
+postgresql:localhost
+mysql:localhost
+```
+
+✅ Connection
+
+```
+postgresql:connection:574
+```
+
+Relationship:
+
+```
+Database
+   |
+   | has_session
+   |
+Connection
+```
+
+✅ Query
+
+```
+postgresql:query:7093
+```
+
+Relationship:
+
+```
+Database
+   |
+   | executes
+   |
+Query
+```
+
+✅ Lock
+
+```
+postgresql:lock:8865:relation:AccessShareLock:12073
+```
+
+Relationship:
+
+```
+Database
+   |
+   | has_lock
+   |
+Lock
+```
+
+---
+
+## Why tables are different
+
+A query:
+
+```sql
+SELECT * FROM expenses;
+```
+
+belongs to a **database session**.
+
+A lock:
+
+```
+pid 8865
+AccessShareLock
+relation 12073
+```
+
+belongs to a **database object**.
+
+That object is usually a table.
+
+Example:
+
+```
+Query
+ |
+ |
+ accesses
+ |
+ v
+Table
+ |
+ |
+ locked_by
+ |
+ v
+Lock
+```
+
+So eventually Galaxy graph should become:
+
+```
+Application
+     |
+     | uses
+     v
+Process
+     |
+     | connects_to
+     v
+Database
+     |
+     +-------------+
+     |             |
+     v             v
+ Query          Connection
+     |
+     |
+ accesses
+     |
+     v
+ Table
+     |
+     |
+ locked_by
+     |
+     v
+ Lock
+```
+
+This is much more powerful.
+
+---
+
+## About putting collectors in one file
+
+You asked earlier:
+
+> why not create both in same file
+
+You mean:
+
+```
+table.py
+lock.py
+query.py
+connection.py
+```
+
+versus:
+
+```
+database.py
+    - connection
+    - query
+    - lock
+    - table
+```
+
+For a small project, one file is easier.
+
+But Galaxy is becoming an observability platform.
+
+Your current structure:
+
+```
+collectors/
+    database/
+        database.py
+        connection.py
+        query.py
+        lock.py
+        table.py
+```
+
+is better because later:
+
+```
+database/
+    postgres/
+        connection.py
+        query.py
+        locks.py
+
+    mysql/
+        connection.py
+        query.py
+```
+
+can happen.
+
+This is the same idea as:
+
+```
+collectors/
+    process.py
+    network.py
+    service.py
+```
+
+You did not put process + network + service into one file.
+
+Database deserves the same separation.
+
+---
+
+# Next step
+
+Your table collector problem is only because it currently checks the default database:
+
+```
+postgres
+```
+
+but your real tables are here:
+
+```
+finance_db
+personal_finance
+```
+
+So next we should improve `DatabaseTableCollector`.
+
+Current:
+
+```
+sudo -u postgres psql
+\dt
+```
+
+checks:
+
+```
+postgres database
+```
+
+which has no tables.
+
+We need:
+
+```
+SELECT datname
+FROM pg_database
+WHERE datistemplate=false;
+```
+
+Then for every database:
+
+```
+finance_db
+personal_finance
+postgres
+```
+
+run:
+
+```sql
+SELECT
+    schemaname,
+    tablename
+FROM pg_tables
+WHERE schemaname NOT IN ('pg_catalog','information_schema');
+```
+
+Then Galaxy observations become:
+
+```
+database_table
+
+postgresql:finance_db:public:expenses
+
+{
+ database:
+ {
+   engine:"postgresql",
+   name:"finance_db"
+ },
+
+ table:
+ {
+   schema:"public",
+   name:"expenses"
+ }
+}
+```
+
+Then relationship:
+
+```
+postgresql:finance_db
+       |
+       | contains
+       |
+public.expenses
+```
+
+---
+
+After that the next layer will be:
+
+```
+QUERY
+ |
+ | reads/writes
+ |
+TABLE
+```
+
+For example:
+
+```
+SELECT * FROM expenses
+```
+
+becomes:
+
+```
+Query
+ |
+ | reads
+ |
+expenses table
+```
+
+That will make Galaxy's graph much closer to a real APM/database monitoring system.
+
+So next task:
+
+**Modify `DatabaseTableCollector` to discover all PostgreSQL databases first, then collect tables from each.**
+
+
+
+Yes, you are thinking in the right direction. Let's separate the three cases.
+
+### 1. TCP connection (network connection)
+
+This is when a client connects using an IP address and port.
+
+Example:
+
+```bash
+psql -h 127.0.0.1 -p 5432 -d finance_db
+```
+
+Flow:
+
+```
+psql
+ |
+ | TCP/IP
+ |
+127.0.0.1:5432
+ |
+PostgreSQL server (postgres PID 337)
+```
+
+`pg_stat_activity` will show:
+
+```
+client_addr | client_port
+------------+------------
+127.0.0.1  | 54321
+```
+
+Your `NetworkCollector` can see this because it uses:
+
+```python
+psutil.net_connections(kind="inet")
+```
+
+It sees TCP sockets.
+
+---
+
+### 2. Remote server connection (also TCP)
+
+Example:
+
+A laptop connects to your PostgreSQL server:
+
+```
+Laptop
+  |
+  | TCP 192.168.x.x:5432
+  |
+Server running PostgreSQL
+```
+
+PostgreSQL sees:
+
+```
+client_addr = 192.168.x.x
+client_port = some_port
+```
+
+This is also visible as a network connection.
+
+---
+
+### 3. Unix socket connection (your current case)
+
+Your command:
+
+```bash
+sudo -u postgres psql -d finance_db
+```
+
+does **not** use TCP.
+
+It uses a file-based communication channel:
+
+```
+psql
+ |
+ |
+Unix socket file
+ |
+/var/run/postgresql/.s.PGSQL.5432
+ |
+PostgreSQL server
+```
+
+The socket file is like a special local communication endpoint.
+
+Your output:
+
+```
+postgres 337
+/var/run/postgresql/.s.PGSQL.5432
+type=STREAM (LISTEN)
+
+
+postgres 25910
+/var/run/postgresql/.s.PGSQL.5432
+type=STREAM (CONNECTED)
+```
+
+means:
+
+```
+PostgreSQL main server
+        |
+        |
+        | Unix socket
+        |
+        |
+psql client
+        |
+        |
+backend process PID 25910
+```
+
+No IP address.
+No TCP port.
+No network interface.
+
+Therefore:
+
+```
+client_addr = NULL
+client_port = -1
+```
+
+from:
+
+```sql
+SELECT client_addr, client_port
+FROM pg_stat_activity;
+```
+
+---
+
+### Why your NetworkCollector cannot see it
+
+Your collector checks:
+
+```python
+psutil.net_connections(kind="inet")
+```
+
+`inet` means:
+
+* IPv4
+* IPv6
+* TCP
+* UDP
+
+It does **not include Unix sockets**.
+
+Unix sockets are a different family:
+
+```python
+psutil.net_connections(kind="unix")
+```
+
+would show them.
+
+---
+
+### For Galaxy architecture, this is actually important
+
+Your current relationship:
+
+```
+database_query
+        |
+        | executed_by
+        |
+     process
+        |
+        |
+postgres backend PID 25910
+```
+
+works because you correlate:
+
+```
+pg_stat_activity.pid
+          |
+          |
+ProcessCollector PID
+```
+
+You do not need TCP for this.
+
+Your graph is:
+
+```
+Application
+     |
+     |
+psql process 25909
+     |
+     |
+Unix socket
+     |
+     |
+Postgres backend process 25910
+     |
+     |
+Database table expenses
+```
+
+The missing piece is only:
+
+```
+psql client PID 25909
+        |
+        | parent-child
+        |
+postgres backend PID 25910
+```
+
+You already collect:
+
+```python
+parent_pid
+```
+
+in `ProcessCollector`.
+
+So later Galaxy can build:
+
+```
+process:25909
+        |
+        | creates
+        |
+process:25910
+        |
+        | executes
+        |
+database_query
+        |
+        | accesses
+        |
+database_table
+```
+
+This is actually a good test case because it proves Galaxy is not only a "network monitor". It is observing **system relationships**, including local IPC (Unix sockets).
+
+
+
+Good question. This is an important Linux/database concept for Galaxy.
+
+When a program connects to PostgreSQL, it can use **two different communication methods**:
+
+## 1. TCP connection (network connection)
+
+Example:
+
+```
+Application
+    |
+    | TCP/IP
+    |
+127.0.0.1:5432
+    |
+PostgreSQL
+```
+
+Here PostgreSQL receives:
+
+```
+client_addr = 127.0.0.1
+client_port = 54321
+```
+
+or maybe:
+
+```
+client_addr = 192.168.x.x
+client_port = 50000
+```
+
+Because TCP uses an IP address and port.
+
+Example:
+
+```bash
+psql -h 127.0.0.1 -d finance_db
+```
+
+This creates a TCP connection.
+
+---
+
+## 2. Unix socket connection (local machine communication)
+
+Your case:
+
+```
+psql process (PID 25909)
+          |
+          |
+          | Unix socket file
+          |
+          ▼
+PostgreSQL backend (PID 25910)
+```
+
+Instead of using:
+
+```
+IP address + port
+```
+
+Linux uses a special file:
+
+```
+/var/run/postgresql/.s.PGSQL.5432
+```
+
+You can see it here:
+
+```
+postgres 337 postgres 7u unix ... /var/run/postgresql/.s.PGSQL.5432 type=STREAM (LISTEN)
+
+postgres 25910 postgres 9u unix ... /var/run/postgresql/.s.PGSQL.5432 type=STREAM (CONNECTED)
+```
+
+Meaning:
+
+### PostgreSQL server
+
+PID:
+
+```
+337
+```
+
+creates the socket:
+
+```
+.s.PGSQL.5432
+```
+
+and waits:
+
+```
+LISTEN
+```
+
+Like:
+
+```
+I am ready for connections
+```
+
+---
+
+Then your `psql`:
+
+```
+PID 25909
+```
+
+connects:
+
+```
+psql
+ |
+ |
+ Unix socket
+ |
+ |
+PostgreSQL backend PID 25910
+```
+
+Linux creates a private communication channel.
+
+---
+
+## Why PostgreSQL shows this:
+
+```
+client_addr |
+client_port -1
+```
+
+Because there is no IP address.
+
+For TCP PostgreSQL would say:
+
+```
+client_addr | 127.0.0.1
+client_port | 54320
+```
+
+But for Unix socket:
+
+```
+client_addr | NULL
+client_port | -1
+```
+
+because:
+
+```
+No network
+No IP
+No TCP port
+```
+
+---
+
+## Why this matters for Galaxy
+
+Your current NetworkCollector uses:
+
+```python
+psutil.net_connections(kind="inet")
+```
+
+`inet` means:
+
+```
+Internet sockets
+(TCP/UDP)
+```
+
+So Galaxy sees:
+
+```
+TCP 127.0.0.1:5432
+```
+
+but it will never see:
+
+```
+/var/run/postgresql/.s.PGSQL.5432
+```
+
+because that is a Unix socket.
+
+For a monitoring system like Galaxy, you eventually need to understand both:
+
+```
+Network world
+----------------
+TCP
+UDP
+
+
+Local IPC world
+----------------
+Unix sockets
+pipes
+shared memory
+```
+
+Your database relationship discovery is actually exposing this exact difference.
+
+The current Galaxy graph is becoming:
+
+```
+                database
+                   |
+                   |
+              executes
+                   |
+                   ▼
+             postgres backend
+                   |
+                   |
+          Unix socket connection
+                   |
+                   ▼
+              psql client
+```
+
+The next architectural question is whether Galaxy should add a **UnixSocketCollector** or extend `NetworkCollector` to collect both `inet` and `unix` connections. For the architecture you are building, I would separate it as its own collector.
+

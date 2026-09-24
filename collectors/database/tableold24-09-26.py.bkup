@@ -1,0 +1,99 @@
+from datetime import datetime, timezone
+import subprocess
+import json
+
+from core.models.observation import Observation
+
+
+class DatabaseTableCollector:
+
+
+    def collect(self):
+
+        observations = []
+
+        observations.extend(
+            self._collect_postgresql()
+        )
+
+        return observations
+
+
+
+    def _collect_postgresql(self):
+
+        observations = []
+
+        result = subprocess.run(
+            [
+                "sudo",
+                "-u",
+                "postgres",
+                "psql",
+                "-t",
+                "-A",
+                "-c",
+                """
+                SELECT json_build_object(
+                    'database',
+                    current_database(),
+                    'schema',
+                    schemaname,
+                    'table',
+                    tablename
+                )
+                FROM pg_tables
+                WHERE schemaname NOT IN (
+                    'pg_catalog',
+                    'information_schema'
+                );
+                """
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+
+        now = datetime.now(timezone.utc)
+
+
+        for line in result.stdout.splitlines():
+
+            if not line.strip():
+                continue
+
+
+            data = json.loads(line)
+
+
+            schema = data["schema"]
+            table = data["table"]
+
+
+            observations.append(
+                Observation(
+                    source="database",
+                    entity_type="database_table",
+                    entity_id=(
+                        f"postgresql:"
+                        f"{schema}:"
+                        f"{table}"
+                    ),
+                    timestamp=now,
+                    data={
+                        "database":{
+                            "engine":"postgresql",
+                            "host":"localhost",
+                            "name":data["database"],
+                        },
+                        "table":{
+                            "schema":schema,
+                            "name":table,
+                        }
+                    }
+                )
+            )
+
+
+        return observations

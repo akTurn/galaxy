@@ -1,4 +1,8 @@
 from collectors.database.connection import DatabaseConnectionCollector
+from collectors.database.query import DatabaseQueryCollector
+from collectors.database.lock import DatabaseLockCollector
+from collectors.database.table import DatabaseTableCollector
+from collectors.database.instance import DatabaseInstanceCollector
 
 
 class DatabaseManager:
@@ -6,6 +10,10 @@ class DatabaseManager:
     def __init__(self):
 
         self.connection_collector = DatabaseConnectionCollector()
+        self.query_collector = DatabaseQueryCollector()
+        self.lock_collector = DatabaseLockCollector()
+        self.table_collector = DatabaseTableCollector()
+        self.instance_collector = DatabaseInstanceCollector()
 
 
     def collect(self):
@@ -21,6 +29,27 @@ class DatabaseManager:
         observations.extend(
             self.connection_collector.collect()
         )
+
+        # database query observations
+        observations.extend(
+        self.query_collector.collect()
+        )
+
+        # database lock observations
+        observations.extend(
+            self.lock_collector.collect()
+        )
+        
+         # database Instance observations
+        observations.extend(
+            self.instance_collector.collect()
+        )
+
+        # database table observations
+        observations.extend(
+            self.table_collector.collect()
+        )
+
 
         return observations
 

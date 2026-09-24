@@ -11,11 +11,22 @@ from core.relationships.network import network_relationships
 from core.relationships.service import service_relationships
 from core.relationships.log import log_relationships
 from core.relationships.application import application_relationships
+from collectors.unix_socket import UnixSocketCollector
+
+from core.relationships.unix_socket import (
+    query_unix_socket_relationships
+)
 from core.relationships.database import (
     database_session_relationships,
     database_service_relationships,
     database_process_relationships,
     application_database_relationships,
+    database_query_relationships,
+    database_lock_relationships,
+    database_table_relationships,
+    query_table_relationships,
+    query_process_relationships,
+    
 )
 from core.graph.process_identity_map import ProcessIdentityMap
 from core.graph.process_lifecycle import ProcessLifecycleTracker
@@ -34,10 +45,12 @@ class Orchestrator:
             ServiceCollector(),
             LogCollector(),
             DatabaseManager(),
+            UnixSocketCollector(),
 
         ]
         self.store = SQLiteStore()
         self.lifecycle_tracker = ProcessLifecycleTracker()
+        
 
 
 
@@ -279,6 +292,137 @@ class Orchestrator:
         all_relationships.extend(
             relationships
         )
+
+
+        # -------------------------
+        # Database → Query relationships
+        # -------------------------        
+
+        query_observations = [
+            observation
+            for observation in all_observations
+            if observation.entity_type == "database_query"
+        ]
+
+
+        for database in database_observations:
+
+            relationships = database_query_relationships(
+                database,
+                query_observations
+            )
+
+            all_relationships.extend(
+                relationships
+            )
+
+
+
+        # -------------------------
+        # Database → Lock relationships
+        # -------------------------
+
+        lock_observations = [
+            observation
+            for observation in all_observations
+            if observation.entity_type == "database_lock"
+        ]
+
+
+        for database in database_observations:
+
+            relationships = database_lock_relationships(
+                database,
+                lock_observations
+            )
+
+            all_relationships.extend(
+                relationships
+            )
+
+
+
+        # -------------------------
+        # Database table relationships
+        # -------------------------
+
+        database_instance_observations = [
+            observation
+            for observation in all_observations
+            if observation.entity_type == "database_instance"
+        ]
+
+
+        table_observations = [
+            observation
+            for observation in all_observations
+            if observation.entity_type == "database_table"
+        ]
+
+
+        relationships = database_table_relationships(
+            database_instance_observations,
+            table_observations
+        )
+
+        all_relationships.extend(
+            relationships
+        )
+
+
+        query_observations=[
+            x for x in all_observations
+            if x.entity_type=="database_query"
+        ]
+
+        # -------------------------
+        # Query → table relationships
+        # -------------------------
+        
+        # table_observations=[
+        #     x for x in all_observations
+        #     if x.entity_type=="database_table"
+        # ]
+
+
+        relationships = query_table_relationships(
+            query_observations,
+            table_observations
+        )
+
+
+        all_relationships.extend(
+            relationships
+        )
+
+        # -------------------------
+        # Query → Process relationships
+        # -------------------------
+
+        relationships = query_process_relationships(
+            query_observations,
+            process_observations
+        )
+
+        all_relationships.extend(
+            relationships
+        )
+
+        
+        unix_sockets_observations=[
+                    x for x in all_observations
+                    if x.entity_type=="unix_socket"
+                ]
+
+        unix_relationships = query_unix_socket_relationships(
+            process_observations,
+            unix_sockets_observations
+        )
+
+        all_relationships.extend(
+            unix_relationships
+        )
+        
 
 
         # -------------------------
