@@ -1,0 +1,1092 @@
+Yes, exactly. The **OID → table name enrichment is mainly for the display / graph intelligence layer**, not the first observation layer.
+
+Right now your Lock Collector is doing the correct thing:
+
+```text
+pg_locks
+   |
+   |
+   v
+
+database_lock observation
+
+{
+    pid:26170,
+    relation:32776,
+    mode:"AccessShareLock"
+}
+```
+
+The collector should stay close to the source. It should not start doing too much interpretation.
+
+---
+
+Later, when we build the graph intelligence/display layer, we can enrich:
+
+Current graph:
+
+```text
+database_query:26170
+        |
+        holds
+        |
+database_lock:26170:relation:AccessShareLock:32776
+```
+
+The display layer can ask:
+
+```
+What does relation 32776 mean?
+```
+
+Then resolve:
+
+```
+pg_class
+JOIN pg_namespace
+```
+
+Example:
+
+```
+32776
+ |
+ |
+ v
+
+finance_db.public.expenses
+```
+
+Then display:
+
+```
+database_query:26170
+        |
+        holds
+        |
+database_lock
+        |
+        locks
+        |
+finance_db.public.expenses
+```
+
+---
+
+However, I would actually separate this into another relationship, not modify the display only.
+
+Eventually you want Galaxy's graph database to know:
+
+```text
+database_lock
+       |
+       locks
+       |
+database_table
+```
+
+because then AI reasoning can use it.
+
+Example:
+
+A user asks:
+
+> Why is my finance application slow?
+
+Galaxy can traverse:
+
+```
+application
+   |
+process
+   |
+database_connection
+   |
+database_query
+   |
+database_lock
+   |
+database_table
+```
+
+and answer:
+
+```
+Query 26170 is holding a lock on
+finance_db.public.expenses
+```
+
+The display is just showing what the graph already knows.
+
+---
+
+So the correct architecture is:
+
+```
+COLLECTION
+-----------
+pg_locks
+     |
+     v
+database_lock observation
+
+
+RELATIONSHIP INTELLIGENCE
+-------------------------
+query
+ |
+ holds
+ |
+lock
+
+lock
+ |
+ locks
+ |
+table
+
+
+DISPLAY
+--------
+Convert:
+
+32776
+
+into:
+
+finance_db.public.expenses
+```
+
+---
+
+For now, I would **not touch this**.
+
+Your current Lock stage is complete enough.
+
+Move to:
+
+```
+Database Health Collector
+```
+
+After Health, we can come back and add:
+
+1. `lock → table` relationship
+2. blocking detection
+3. deadlock intelligence
+
+Those are more advanced database reasoning features.
+
+
+
+Yes, this is a good **Database Intelligence module breakdown** for Galaxy.
+
+I would structure it like this:
+
+```text
+Database Intelligence
+│
+├── connections
+│
+├── queries
+│
+├── locks
+│
+├── tables
+│
+├── indexes
+│
+└── health
+```
+
+But let's define the responsibility of each one clearly so we don't overlap.
+
+---
+
+## 1. Connections ✅ (already mostly done)
+
+Purpose:
+
+> Who is connected to the database?
+
+Observations:
+
+```text
+database_connection
+```
+
+Example:
+
+```text
+postgresql:connection:26170
+
+{
+ pid:26170,
+ user:"postgres",
+ database:"finance_db",
+ state:"active"
+}
+```
+
+Relationships:
+
+```text
+process
+   |
+   owns_connection
+   |
+database_connection
+```
+
+---
+
+## 2. Queries ✅ (already done)
+
+Purpose:
+
+> What is the database doing right now?
+
+Observation:
+
+```text
+database_query
+```
+
+Example:
+
+```sql
+SELECT pg_sleep(60), * FROM expenses;
+```
+
+Relationships:
+
+```text
+database_connection
+        |
+        executes
+        |
+database_query
+```
+
+and:
+
+```text
+database_query
+        |
+        executed_by
+        |
+process
+```
+
+---
+
+## 3. Locks ✅ (almost complete)
+
+Purpose:
+
+> What resources are being locked?
+
+Observation:
+
+```text
+database_lock
+```
+
+Current:
+
+```text
+database_query
+       |
+       holds
+       |
+database_lock
+```
+
+Later:
+
+```text
+database_lock
+       |
+       locks
+       |
+database_table
+```
+
+and:
+
+```text
+database_lock
+       |
+       blocks
+       |
+database_lock
+```
+
+---
+
+## 4. Tables ✅
+
+Purpose:
+
+> What database objects exist?
+
+Observation:
+
+```text
+database_table
+```
+
+Example:
+
+```text
+postgresql:finance_db:public:expenses
+```
+
+Relationships:
+
+Currently:
+
+```text
+database_instance
+       |
+       contains
+       |
+database_table
+```
+
+Later:
+
+```text
+database_query
+       |
+       accesses
+       |
+database_table
+```
+
+You already have this.
+
+---
+
+## 5. Indexes ⏳
+
+Purpose:
+
+> How does the database search data?
+
+Observation:
+
+```text
+database_index
+```
+
+Example:
+
+```text
+finance_db.public.expenses_idx_user_id
+```
+
+Information:
+
+```text
+index_name
+table_name
+columns
+unique
+size
+type
+```
+
+Relationship:
+
+```text
+database_table
+       |
+       has_index
+       |
+database_index
+```
+
+Later useful for:
+
+* slow query reasoning
+* missing index detection
+* performance recommendations
+
+---
+
+## 6. Health ⏳ (next)
+
+Purpose:
+
+> Is the database alive and operating correctly?
+
+Observation:
+
+```text
+database_health
+```
+
+First version:
+
+```json
+{
+ "status":"healthy"
+}
+```
+
+Later:
+
+```json
+{
+ "status":"healthy",
+ "connections_used":20,
+ "connections_max":100,
+ "response_time_ms":5,
+ "uptime":123456
+}
+```
+
+Relationship:
+
+```text
+database
+    |
+    has_health
+    |
+database_health
+```
+
+---
+
+So the final Database Intelligence graph becomes:
+
+```text
+                         database_health
+                              ^
+                              |
+                              |
+database ---------------------+
+    |
+    |
+    +---- contains ----> database_instance
+                              |
+                              |
+                              +---- contains ----> database_table
+                                                       |
+                                                       |
+                                                       +---- has_index ----> database_index
+
+
+process
+   |
+   owns_connection
+   |
+database_connection
+   |
+   executes
+   |
+database_query
+   |
+   accesses
+   |
+database_table
+
+
+database_query
+       |
+       holds
+       |
+database_lock
+```
+
+Your current progress:
+
+```text
+connections   ✅
+queries       ✅
+locks         ✅ (needs table enrichment later)
+tables        ✅
+indexes       ❌
+health        ❌
+```
+
+So the logical next step is still **Health**, then **Indexes**.
+
+
+
+Yes. Let's look at **Galaxy Database Intelligence from start to end** as a complete flow.
+
+Think of Database Intelligence as Galaxy learning:
+
+> "What databases exist, what are they doing, who is using them, what resources are affected, and whether they are healthy."
+
+The flow is:
+
+```text
+DATABASE SYSTEM
+        |
+        v
+COLLECT OBSERVATIONS
+        |
+        v
+CREATE RELATIONSHIPS
+        |
+        v
+BUILD DATABASE GRAPH
+        |
+        v
+ANALYZE / REASON
+```
+
+---
+
+# 1. Database Discovery (What databases exist?)
+
+First Galaxy asks:
+
+> "What database engines are running on this machine?"
+
+Example:
+
+You have:
+
+```
+PostgreSQL
+MySQL
+```
+
+Galaxy creates observations:
+
+```
+database
+|
+|-- postgresql:localhost
+|
+|-- mysql:localhost
+```
+
+Observation:
+
+```python
+{
+ entity_type:"database",
+ entity_id:"postgresql:localhost",
+
+ data:{
+    identity:{
+       engine:"postgresql",
+       host:"localhost"
+    },
+    state:{
+       status:"running"
+    }
+ }
+}
+```
+
+At this stage Galaxy only knows:
+
+```
+There is a PostgreSQL server running.
+```
+
+It does not know users, queries, tables, etc.
+
+---
+
+# 2. Connection Intelligence
+
+Next question:
+
+> "Who is connected to this database?"
+
+Galaxy collects database connections.
+
+From PostgreSQL:
+
+```
+pg_stat_activity
+```
+
+Example:
+
+```
+PID     USER       DATABASE
+26170   postgres   finance_db
+29670   postgres   postgres
+```
+
+Galaxy creates:
+
+```
+database_connection
+```
+
+Example:
+
+```
+postgresql:connection:26170
+```
+
+Data:
+
+```json
+{
+ pid:26170,
+ user:"postgres",
+ database:"finance_db",
+ state:"active"
+}
+```
+
+Now Galaxy knows:
+
+```
+Database
+    |
+    has connections
+```
+
+Relationship:
+
+```
+database
+    |
+    contains
+    |
+database_connection
+```
+
+---
+
+# 3. Process Relationship
+
+A database connection is actually owned by an operating system process.
+
+Example:
+
+Linux:
+
+```
+PID 26170
+```
+
+belongs to PostgreSQL backend process.
+
+Galaxy already has process intelligence.
+
+So it connects:
+
+```
+process
+    |
+    owns_connection
+    |
+database_connection
+```
+
+Now Galaxy knows:
+
+```
+Which Linux process owns this database connection.
+```
+
+---
+
+# 4. Query Intelligence
+
+Next question:
+
+> "What is the database currently doing?"
+
+Galaxy reads:
+
+```
+pg_stat_activity
+```
+
+Example:
+
+```
+PID:
+26170
+
+SQL:
+SELECT pg_sleep(60), * FROM expenses;
+```
+
+Creates:
+
+```
+database_query
+```
+
+Example:
+
+```
+postgresql:query:26170
+```
+
+Relationship:
+
+```
+database_connection
+          |
+          executes
+          |
+     database_query
+```
+
+Now Galaxy understands:
+
+```
+Process
+   |
+Connection
+   |
+Query
+```
+
+Example:
+
+```
+python application
+        |
+        |
+database connection
+        |
+        |
+SELECT * FROM expenses
+```
+
+---
+
+# 5. Table Intelligence
+
+Next question:
+
+> "Which tables exist?"
+
+Galaxy reads database schema.
+
+Example:
+
+```
+finance_db
+
+tables:
+
+expenses
+users
+transactions
+accounts
+```
+
+Creates:
+
+```
+database_table
+```
+
+Example:
+
+```
+postgresql:finance_db:public:expenses
+```
+
+Relationship:
+
+```
+database_instance
+          |
+          contains
+          |
+     database_table
+```
+
+Now Galaxy knows the database structure.
+
+---
+
+# 6. Query → Table Intelligence
+
+Now combine:
+
+Query:
+
+```sql
+SELECT *
+FROM expenses;
+```
+
+Galaxy sees:
+
+```
+expenses
+```
+
+inside SQL.
+
+Creates:
+
+```
+database_query
+        |
+        accesses
+        |
+database_table
+```
+
+Now Galaxy understands:
+
+```
+Which query is touching which table.
+```
+
+Example:
+
+```
+Query 26170
+
+      accesses
+
+finance_db.expenses
+```
+
+---
+
+# 7. Lock Intelligence
+
+Next question:
+
+> "Is something blocking database activity?"
+
+Galaxy reads:
+
+```
+pg_locks
+```
+
+Example:
+
+```
+PID 26170
+
+AccessShareLock
+
+relation 32776
+```
+
+Creates:
+
+```
+database_lock
+```
+
+Relationship:
+
+```
+database_query
+        |
+        holds
+        |
+database_lock
+```
+
+Meaning:
+
+```
+This query currently owns this lock.
+```
+
+Later:
+
+```
+database_lock
+        |
+        locks
+        |
+database_table
+```
+
+so Galaxy can say:
+
+```
+Query 26170 is locking table expenses
+```
+
+---
+
+# 8. Index Intelligence
+
+Next question:
+
+> "How does the database access data?"
+
+Galaxy reads:
+
+```
+pg_indexes
+```
+
+Example:
+
+```
+expenses_user_id_idx
+```
+
+Creates:
+
+```
+database_index
+```
+
+Relationship:
+
+```
+database_table
+        |
+        has_index
+        |
+database_index
+```
+
+Now Galaxy understands:
+
+```
+Table
+ |
+ Index
+ |
+ Query performance
+```
+
+---
+
+# 9. Health Intelligence
+
+Finally:
+
+> "Is the database healthy?"
+
+Galaxy checks:
+
+* connection availability
+* response time
+* uptime
+* errors
+* resource usage
+
+Creates:
+
+```
+database_health
+```
+
+Relationship:
+
+```
+database
+    |
+    has_health
+    |
+database_health
+```
+
+Example:
+
+```
+PostgreSQL
+
+Health:
+  status: healthy
+  response: 5ms
+  connections: 20/100
+```
+
+---
+
+# Final Galaxy Database Graph
+
+At the end, Galaxy has something like:
+
+```
+                     database_health
+                            ^
+                            |
+                            |
+                       DATABASE
+                            |
+              -------------------------
+              |                       |
+              |                       |
+       database_instance          database_lock
+              |                       ^
+              |                       |
+              |                    holds
+              |
+       database_table
+              |
+          has_index
+              |
+       database_index
+
+
+PROCESS
+   |
+   owns_connection
+   |
+DATABASE_CONNECTION
+   |
+   executes
+   |
+DATABASE_QUERY
+   |
+   accesses
+   |
+DATABASE_TABLE
+```
+
+---
+
+# The important idea
+
+Galaxy is not just collecting database information.
+
+A normal monitoring tool says:
+
+```
+CPU = 80%
+Database = slow
+```
+
+Galaxy builds a **cause graph**:
+
+```
+Application process
+        |
+        owns connection
+        |
+        executes slow query
+        |
+        locks table
+        |
+        blocks another query
+```
+
+That is why we are building relationships, not just collectors.
+
+Collectors answer:
+
+> "What exists?"
+
+Relationships answer:
+
+> "How are things connected?"
+
+The graph answers:
+
+> "Why is something happening?"
+
+That is the complete Database Intelligence pipeline.

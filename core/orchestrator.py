@@ -21,11 +21,17 @@ from core.relationships.database import (
     database_service_relationships,
     database_process_relationships,
     application_database_relationships,
-    database_query_relationships,
+    #database_query_relationships,
     database_lock_relationships,
     database_table_relationships,
     query_table_relationships,
     query_process_relationships,
+    unix_socket_database_relationships,
+    database_instance_relationships,
+     process_database_connection_relationships,
+     database_connection_instance_relationships,
+     database_connection_query_relationships,
+     database_query_lock_relationships
     
 )
 from core.graph.process_identity_map import ProcessIdentityMap
@@ -230,7 +236,7 @@ class Orchestrator:
         # 10. Database relationships
         # -------------------------
 
-        database_observations = [
+        database_servers_observations = [
             observation
             for observation in all_observations
             if observation.entity_type == "database"
@@ -246,10 +252,10 @@ class Orchestrator:
 
         # Database → Connection
 
-        for database in database_observations:
+        for database_server in database_servers_observations:
 
             relationships = database_session_relationships(
-                database,
+                database_server,
                 database_connection_observations
             )
 
@@ -257,12 +263,14 @@ class Orchestrator:
                 relationships
             )
 
+        
+
 
         # Service → Database
 
         relationships = database_service_relationships(
             service_observations,
-            database_observations
+            database_servers_observations
         )
 
         all_relationships.extend(
@@ -274,7 +282,7 @@ class Orchestrator:
 
         process_db_relationships = database_process_relationships(
             process_observations,
-            database_observations
+            database_servers_observations
         )
 
         all_relationships.extend(
@@ -305,16 +313,16 @@ class Orchestrator:
         ]
 
 
-        for database in database_observations:
+        # for database in database_servers_observations:
 
-            relationships = database_query_relationships(
-                database,
-                query_observations
-            )
+        #     relationships = database_query_relationships(
+        #         database,
+        #         query_observations
+        #     )
 
-            all_relationships.extend(
-                relationships
-            )
+        #     all_relationships.extend(
+        #         relationships
+        #     )
 
 
 
@@ -329,7 +337,7 @@ class Orchestrator:
         ]
 
 
-        for database in database_observations:
+        for database in database_servers_observations:
 
             relationships = database_lock_relationships(
                 database,
@@ -340,7 +348,7 @@ class Orchestrator:
                 relationships
             )
 
-
+        
 
         # -------------------------
         # Database table relationships
@@ -370,7 +378,7 @@ class Orchestrator:
         )
 
 
-        query_observations=[
+        database_query_observations=[
             x for x in all_observations
             if x.entity_type=="database_query"
         ]
@@ -386,7 +394,7 @@ class Orchestrator:
 
 
         relationships = query_table_relationships(
-            query_observations,
+            database_query_observations,
             table_observations
         )
 
@@ -400,7 +408,7 @@ class Orchestrator:
         # -------------------------
 
         relationships = query_process_relationships(
-            query_observations,
+            database_query_observations,
             process_observations
         )
 
@@ -408,6 +416,61 @@ class Orchestrator:
             relationships
         )
 
+        # -------------------------
+        # Query → Lock relationships
+        # -------------------------
+
+
+        query_lock_relationships = database_query_lock_relationships(
+            database_query_observations,
+            lock_observations
+        )
+
+
+        all_relationships.extend(
+            query_lock_relationships
+        )
+
+
+        
+        # Process → Connection
+
+        process_connection_relationships = (
+            process_database_connection_relationships(
+                process_observations,
+                database_connection_observations
+            )
+        )
+
+
+        all_relationships.extend(
+            process_connection_relationships
+        )
+
+        # Connection → Instance
+
+        connection_instance_relationships = (
+            database_connection_instance_relationships(
+                database_connection_observations,
+                database_instance_observations
+            )
+        )
+
+
+        all_relationships.extend(
+            connection_instance_relationships
+        )
+
+        # Connection → Query
+
+        query_relationships = database_connection_query_relationships(
+            database_connection_observations,
+            database_query_observations
+        )
+
+        all_relationships.extend(
+            query_relationships
+        )
         
         unix_sockets_observations=[
                     x for x in all_observations
@@ -421,6 +484,44 @@ class Orchestrator:
 
         all_relationships.extend(
             unix_relationships
+        )
+
+
+
+        database_instance_observations=[
+            x for x in all_observations
+            if x.entity_type=="database_instance"
+        ]
+
+
+        unix_database_relationships = unix_socket_database_relationships(
+            unix_sockets_observations,
+            #database_instance_observations
+            database_servers_observations
+        )
+
+
+        all_relationships.extend(
+            unix_database_relationships
+        )
+
+       
+
+
+        database_instances=[
+            x for x in all_observations
+            if x.entity_type=="database_instance"
+        ]
+
+
+        relationships = database_instance_relationships(
+            database_servers_observations,
+            database_instances
+        )
+
+
+        all_relationships.extend(
+            relationships
         )
         
 
@@ -437,43 +538,9 @@ class Orchestrator:
             lifecycle_events
         )
 
-        # print(
-        #     f"Lifecycle: "
-        #     f"{len(lifecycle['started'])} started, "
-        #     f"{len(lifecycle['running'])} running, "
-        #     f"{len(lifecycle['exited'])} exited"
-        # )
-
+        
         return all_observations, all_relationships
 
-
-
-
-
-    
-        # for observation in all_observations:
-
-        #     if observation.entity_type == "process":
-
-        #         relationships = process_relationships(
-        #             observation
-        #         )
-
-        #         all_relationships.extend(relationships) 
-
-    # def run_once(self):
-    #     all_observations = []
-
-    #     for collector in self.collectors:
-    #         observations = collector.collect()
-    #         all_observations.extend(observations)
-
-    #     self.store.save(all_observations)
-
-    #     #return all_observationsdef run_once(self):
-    
-
-    #     return len(all_observations), self.store.count()
 
 
     

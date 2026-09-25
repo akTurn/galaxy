@@ -1,4 +1,5 @@
 from core.models.relationship import Relationship
+from datetime import datetime, timezone
 
 
 def database_session_relationships(
@@ -185,34 +186,35 @@ def application_database_relationships(
     return relationships
 
 
-def database_query_relationships(
-        database_observation,
-        query_observations
-):
-    relationships = []
+# def database_query_relationships(
+#         database_observation,
+#         query_observations
+# ):
+#     relationships = []
 
-    database_engine = database_observation.data["identity"]["engine"]
+#     database_engine = database_observation.data["identity"]["engine"]
 
-    for query in query_observations:
+#     for query in query_observations:
 
-        query_engine = query.data["database"]["engine"]
+#         query_engine = query.data["database"]["engine"]
 
-        if database_engine != query_engine:
-            continue
+#         if database_engine != query_engine:
+#             continue
 
-        relationships.append(
-            Relationship(
-                source_entity_type="database",
-                source_entity_id=database_observation.entity_id,
-                relationship_type="executes",
-                target_entity_type="database_query",
-                target_entity_id=query.entity_id,
-                timestamp=query.timestamp,
-            )
-        )
+#         relationships.append(
+#             Relationship(
+#                 source_entity_type="database",
+#                 source_entity_id=database_observation.entity_id,
+#                 relationship_type="executes",
+#                 target_entity_type="database_query",
+#                 target_entity_id=query.entity_id,
+#                 timestamp=query.timestamp,
+#             )
+#         )
 
-    return relationships
+#     return relationships
 
+import re
 
 def query_table_relationships(
         query_observations,
@@ -241,7 +243,12 @@ def query_table_relationships(
             )
 
 
-            if table_name in sql:
+            #if table_name in sql:
+            
+
+            pattern = r"\b" + table_name + r"\b"
+
+            if re.search(pattern, sql):
 
                 relationships.append(
                     Relationship(
@@ -291,7 +298,53 @@ def database_lock_relationships(
 
     return relationships
 
+def database_query_lock_relationships(
+        query_observations,
+        lock_observations
+):
 
+    relationships = []
+
+    for query in query_observations:
+
+        query_pid = (
+            query
+            .data
+            .get("query", {})
+            .get("pid")
+        )
+
+        if not query_pid:
+            continue
+
+
+        for lock in lock_observations:
+
+            lock_pid = (
+                lock
+                .data
+                .get("lock", {})
+                .get("pid")
+            )
+
+
+            if str(query_pid) != str(lock_pid):
+                continue
+
+
+            relationships.append(
+                Relationship(
+                    source_entity_type="database_query",
+                    source_entity_id=query.entity_id,
+                    relationship_type="holds",
+                    target_entity_type="database_lock",
+                    target_entity_id=lock.entity_id,
+                    timestamp=lock.timestamp,
+                )
+            )
+
+
+    return relationships
 
 def database_table_relationships(
     instance_observations,
@@ -412,6 +465,292 @@ def process_database_endpoint_relationships(
     return relationships
 
 
+
+from datetime import datetime, timezone
+
+
+def unix_socket_database_relationships(
+        unix_socket_observations,
+        database_observations
+):
+
+    relationships = []
+
+    now=datetime.now(timezone.utc)
+
+
+    for socket in unix_socket_observations:
+
+        path = socket.data.get("socket_path")
+
+
+        if ".s.PGSQL." not in path:
+            continue
+
+
+        for database in database_observations:
+
+
+            if database.data["identity"]["engine"] == "postgresql":
+
+                relationships.append(
+
+                    Relationship(
+                        source_entity_type="unix_socket",
+
+                        source_entity_id=socket.entity_id,
+
+                        relationship_type="belongs_to",
+
+                        target_entity_type="database",
+
+                        target_entity_id=database.entity_id,
+
+                        timestamp=now
+                    )
+
+                )
+
+
+    return relationships
+
+
+
+
+
+def database_instance_relationships(
+        database_observations,
+        instance_observations
+):
+
+    relationships=[]
+
+    now=datetime.now(timezone.utc)
+
+
+    for db in database_observations:
+
+        if db.entity_type!="database":
+            continue
+
+
+        for instance in instance_observations:
+
+
+            if instance.data["database"]["engine"] == \
+               db.data["identity"]["engine"]:
+
+
+                relationships.append(
+
+                    Relationship(
+
+                        source_entity_type="database",
+
+                        source_entity_id=db.entity_id,
+
+                        relationship_type="contains",
+
+                        target_entity_type="database_instance",
+
+                        target_entity_id=instance.entity_id,
+
+                        timestamp=now
+
+                    )
+
+                )
+
+
+    return relationships
+
+
+def process_database_connection_relationships(
+        process_observations,
+        connection_observations
+):
+
+    relationships=[]
+
+    now=datetime.now(timezone.utc)
+
+
+    processes = {
+        str(p.data["pid"]): p
+        for p in process_observations
+    }
+
+
+    for conn in connection_observations:
+
+        if conn.entity_type != "database_connection":
+            continue
+
+
+        pid = conn.data["connection"].get("pid")
+
+
+        if not pid:
+            continue
+
+
+        process = processes.get(str(pid))
+
+
+        if not process:
+            continue
+
+
+
+        relationships.append(
+
+            Relationship(
+
+                source_entity_type="process",
+
+                source_entity_id=process.entity_id,
+
+                relationship_type="owns_connection",
+
+                target_entity_type="database_connection",
+
+                target_entity_id=conn.entity_id,
+
+                timestamp=now
+
+            )
+
+        )
+
+
+    return relationships
+
+
+def database_connection_instance_relationships(
+        connection_observations,
+        instance_observations
+):
+
+    relationships = []
+
+    now = datetime.now(timezone.utc)
+
+
+    for connection in connection_observations:
+
+
+        database_name = (
+            connection
+            .data
+            .get("connection", {})
+            .get("database")
+        )
+
+
+        if not database_name:
+            continue
+
+
+
+        for instance in instance_observations:
+
+
+            instance_name = (
+                instance
+                .data
+                .get("database", {})
+                .get("name")
+            )
+
+
+            if database_name == instance_name:
+
+
+                relationships.append(
+
+                    Relationship(
+
+                        source_entity_type="database_connection",
+
+                        source_entity_id=connection.entity_id,
+
+                        relationship_type="connected_to",
+
+                        target_entity_type="database_instance",
+
+                        target_entity_id=instance.entity_id,
+
+                        timestamp=now
+
+                    )
+
+                )
+
+
+    return relationships
+
+
+def database_connection_query_relationships(
+        connection_observations,
+        query_observations
+):
+
+    relationships = []
+
+    now = datetime.now(timezone.utc)
+
+
+    for connection in connection_observations:
+
+
+        connection_pid = (
+            connection
+            .data
+            .get("connection", {})
+            .get("pid")
+        )
+
+
+        if not connection_pid:
+            continue
+
+
+
+        for query in query_observations:
+
+
+            query_pid = (
+                query
+                .data
+                .get("query", {})
+                .get("pid")
+            )
+
+
+            if connection_pid == query_pid:
+
+
+                relationships.append(
+
+                    Relationship(
+
+                        source_entity_type="database_connection",
+
+                        source_entity_id=connection.entity_id,
+
+                        relationship_type="executes",
+
+                        target_entity_type="database_query",
+
+                        target_entity_id=query.entity_id,
+
+                        timestamp=now
+
+                    )
+                )
+
+
+    return relationships
 # def database_table_relationships(
 #         database_observations,
 #         table_observations

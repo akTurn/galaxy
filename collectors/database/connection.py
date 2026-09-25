@@ -87,7 +87,7 @@ class DatabaseConnectionCollector:
                             "host": "localhost",
                         },
                         "connection": {
-                            "id": pid,
+                            "pid": pid,
                             "user": user,
                             "database": database,
                             "state": state,
