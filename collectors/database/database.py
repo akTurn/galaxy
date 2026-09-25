@@ -3,6 +3,8 @@ from collectors.database.query import DatabaseQueryCollector
 from collectors.database.lock import DatabaseLockCollector
 from collectors.database.table import DatabaseTableCollector
 from collectors.database.instance import DatabaseInstanceCollector
+from collectors.database.health import DatabaseHealthCollector
+from collectors.database.index import DatabaseIndexCollector
 
 
 class DatabaseManager:
@@ -14,6 +16,10 @@ class DatabaseManager:
         self.lock_collector = DatabaseLockCollector()
         self.table_collector = DatabaseTableCollector()
         self.instance_collector = DatabaseInstanceCollector()
+        self.health_collector = DatabaseHealthCollector()
+        self.index_collector = DatabaseIndexCollector()
+
+        
 
 
     def collect(self):
@@ -41,6 +47,8 @@ class DatabaseManager:
         )
         
          # database Instance observations
+        database_instances = self.instance_collector.collect()
+
         observations.extend(
             self.instance_collector.collect()
         )
@@ -50,6 +58,28 @@ class DatabaseManager:
             self.table_collector.collect()
         )
 
+        # database health observations
+        observations.extend(
+            self.health_collector.collect()
+        )
+
+        # database index observations
+
+        # observations.extend(
+        #     self.index_collector.collect()
+        # )
+
+        
+        # indexes
+        for instance in database_instances:
+
+            database_name = (
+                instance.data["database"]["name"]
+            )
+
+            observations.extend(
+                self.index_collector.collect(database_name)
+            )
 
         return observations
 

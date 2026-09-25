@@ -751,6 +751,179 @@ def database_connection_query_relationships(
 
 
     return relationships
+
+
+def database_health_relationships(
+        database_observations,
+        health_observations
+):
+
+    relationships=[]
+
+
+    for database in database_observations:
+
+        engine = (
+            database
+            .data["identity"]["engine"]
+        )
+
+
+        for health in health_observations:
+
+            health_engine = (
+                health
+                .data["database"]["engine"]
+            )
+
+
+            if engine != health_engine:
+                continue
+
+
+            relationships.append(
+
+                Relationship(
+
+                    source_entity_type="database",
+
+                    source_entity_id=database.entity_id,
+
+                    relationship_type="has_health",
+
+                    target_entity_type="database_health",
+
+                    target_entity_id=health.entity_id,
+
+                    timestamp=health.timestamp
+
+                )
+
+            )
+
+
+    return relationships
+
+def database_index_relationships(
+        table_observations,
+        index_observations
+):
+
+    relationships = []
+
+
+    table_map = {
+        (
+            table.data["table"]["schema"],
+            table.data["table"]["name"]
+        ): table
+        for table in table_observations
+    }
+
+
+    for index in index_observations:
+
+        index_data = index.data["index"]
+
+        table = table_map.get(
+            (
+                index_data["schema"],
+                index_data["table"]
+            )
+        )
+
+
+        if not table:
+            continue
+
+
+        relationships.append(
+
+            Relationship(
+
+                source_entity_type="database_table",
+
+                source_entity_id=table.entity_id,
+
+                relationship_type="has_index",
+
+                target_entity_type="database_index",
+
+                target_entity_id=index.entity_id,
+
+                timestamp=index.timestamp
+            )
+        )
+
+
+    return relationships
+
+
+def database_index_relationshipswithoutLookup(
+        table_observations,
+        index_observations
+):
+
+    relationships = []
+
+
+    for table in table_observations:
+
+        table_name = (
+            table.data["table"]["name"]
+        )
+
+        schema = (
+            table.data["table"]["schema"]
+        )
+
+
+        for index in index_observations:
+
+
+            index_data = index.data["index"]
+
+
+            # if (
+            #     index_data["table"] == table_name
+            #     and
+            #     index_data["schema"] == schema
+            # ):
+
+            #add database matching also, because different databases can have the same table names
+            if (
+                index_data["table"] == table_name
+                and
+                index_data["schema"] == schema
+                and
+                index.data["database"]["name"] 
+                    == table.data["database"]["name"]
+            ):
+
+                relationships.append(
+
+                    Relationship(
+
+                        source_entity_type="database_table",
+
+                        source_entity_id=table.entity_id,
+
+                        relationship_type="has_index",
+
+                        target_entity_type="database_index",
+
+                        target_entity_id=index.entity_id,
+
+                        timestamp=index.timestamp
+
+                    )
+
+                )
+
+
+    return relationships
+
+
 # def database_table_relationships(
 #         database_observations,
 #         table_observations

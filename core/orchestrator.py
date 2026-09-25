@@ -31,7 +31,9 @@ from core.relationships.database import (
      process_database_connection_relationships,
      database_connection_instance_relationships,
      database_connection_query_relationships,
-     database_query_lock_relationships
+     database_query_lock_relationships,
+     database_health_relationships,
+     database_index_relationships
     
 )
 from core.graph.process_identity_map import ProcessIdentityMap
@@ -523,6 +525,36 @@ class Orchestrator:
         all_relationships.extend(
             relationships
         )
+
+        database_health_observations=[
+                    x for x in all_observations
+                    if x.entity_type=="database_health"
+                ]
+
+        relationships = database_health_relationships(
+                    database_servers_observations,
+                    database_health_observations
+                )
+        
+        
+        all_relationships.extend(
+                    relationships
+                )
+
+        database_index_observations=[
+                            x for x in all_observations
+                            if x.entity_type=="database_index"
+                        ]
+        relationships = database_index_relationships(
+                            table_observations,
+                            database_index_observations
+                        )
+                
+                
+        all_relationships.extend(
+                            relationships
+                        )
+        
         
 
 
