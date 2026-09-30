@@ -154,21 +154,7 @@ class Orchestrator:
                 relationships
             )
 
-        # --------------------------------
-        # Host -> Process relationships
-        # --------------------------------
-
-        
-
-        for observation in process_observations:
-
-            relationship = host_relationships(
-                observation
-            )
-
-            all_relationships.append(
-                relationship
-            )
+       
 
 
         # -------------------------
@@ -192,6 +178,26 @@ class Orchestrator:
         all_relationships.extend(
             application_relationships_list
         )
+
+
+        # --------------------------------
+        # Host -> Process relationships
+        # --------------------------------
+        host_observations = [
+                                 observation
+                                 for observation in all_observations
+                                 if observation.entity_type == "host"
+                             ]
+         
+        host_relationships_list = host_relationships(
+                 #host_observations,
+                 process_observations,
+                 service_observations,
+             )
+ 
+        relationships.extend(
+                 host_relationships_list
+             )       
 
         # -------------------------
         # 7. Network relationships

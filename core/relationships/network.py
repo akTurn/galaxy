@@ -58,7 +58,7 @@ def network_relationships(observation, identity_map):
             Relationship(
                 source_entity_type="process",
                 source_entity_id=process_entity_id,
-                relationship_type="has_connection",
+                relationship_type="owns_connection",
                 target_entity_type="network_connection",
                 target_entity_id=observation.entity_id,
                 timestamp=observation.timestamp,

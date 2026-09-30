@@ -11,7 +11,7 @@ def service_relationships(
     ServiceCollector), produce a relationship connecting the service
     to the stable process entity it currently manages.
  
-    Service ---- runs_as/manages ----> Process
+    Service ---- manages ----> Process
  
     If main_pid is 0 (no active main process) or the pid isn't in the
     current identity map (process not observed this cycle, or the

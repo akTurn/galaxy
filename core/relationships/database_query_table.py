@@ -9,7 +9,7 @@ def query_table_relationships(
         query_observations,
         table_observations
 ):
-    print("Inside")
+    
     relationships = []
 
 
@@ -90,7 +90,7 @@ def query_table_relationships(
 
             )
 
-        print("outside")
+        
     return relationships
 
 
@@ -101,7 +101,7 @@ def extract_tables_from_explain(
         database,
         sql
 ):
-    print("In")
+    
     tables = set()
 
 
@@ -145,12 +145,12 @@ def extract_tables_from_explain(
         )
 
 
-        print(
-            json.dumps(
-                explain,
-                indent=4
-            )
-        )
+        # print(
+        #     json.dumps(
+        #         explain,
+        #         indent=4
+        #     )
+        # )
         plan = (
             explain[0]
             ["Plan"]
@@ -170,7 +170,7 @@ def extract_tables_from_explain(
             e
         )
 
-    print(tables)
+    
     return tables
 
 

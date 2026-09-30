@@ -160,7 +160,7 @@ def application_database_relationships(
 
     for app in application_relationships:
 
-        if app.relationship_type != "runs":
+        if app.relationship_type != "has_process":
             continue
 
 

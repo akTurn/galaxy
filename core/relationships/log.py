@@ -57,7 +57,7 @@ def log_relationships(
         Relationship(
             source_entity_type="log",
             source_entity_id=log_observation.entity_id,
-            relationship_type="associated_with",
+            relationship_type="belongs_to",
             target_entity_type="service",
             target_entity_id=service_entity_id,
             timestamp=log_observation.timestamp,

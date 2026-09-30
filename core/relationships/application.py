@@ -130,7 +130,7 @@ def application_relationships(
             Relationship(
                 source_entity_type="application",
                 source_entity_id=application_entity_id,
-                relationship_type="runs",
+                relationship_type="has_process",
                 target_entity_type="process",
                 target_entity_id=process_observation.entity_id,
                 timestamp=process_observation.timestamp,
@@ -166,7 +166,7 @@ def application_relationships(
             Relationship(
                 source_entity_type="application",
                 source_entity_id=application_entity_id,
-                relationship_type="associated_with",
+                relationship_type="managed_by",
                 target_entity_type="service",
                 target_entity_id=service_entity_id,
                 timestamp=datetime.now(timezone.utc),

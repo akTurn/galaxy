@@ -494,3 +494,544 @@ HighCPUProcessRule
 will use your graph.
 
 You are at the correct point to start Milestone 14.
+
+
+
+Your database relationship design is quite good. You are moving from simple infrastructure relationships into **application intelligence**, which is exactly where Galaxy becomes more valuable.
+
+I would mainly review the **relationship names** and one consistency issue.
+
+---
+
+# 1. Database → Database Connection
+
+Current:
+
+```python
+relationship_type="has_session"
+```
+
+Graph:
+
+```
+DATABASE
+    |
+    | has_session
+    ↓
+DATABASE_CONNECTION
+```
+
+This is good.
+
+A database connection/session is owned by a database.
+
+However, if `database_connection` represents a client connection (for example application → PostgreSQL), then the direction may be reversed.
+
+Example:
+
+```
+Application
+      |
+      | opens_connection
+      ↓
+Database
+```
+
+But based on your current model:
+
+```
+Database
+      |
+      | has_session
+      ↓
+Database Connection
+```
+
+is acceptable.
+
+Keep:
+
+```python
+has_session
+```
+
+---
+
+# 2. Service → Database
+
+Current:
+
+```python
+relationship_type="provides"
+```
+
+Graph:
+
+```
+SERVICE
+    |
+    | provides
+    ↓
+DATABASE
+```
+
+I would change this.
+
+Example:
+
+```
+postgresql.service
+        |
+        | provides
+        ↓
+PostgreSQL database
+```
+
+The service does not "provide" the database in the business sense. It manages the database server process.
+
+Better:
+
+```python
+relationship_type="manages"
+```
+
+Graph:
+
+```
+SERVICE
+    |
+    | manages
+    ↓
+DATABASE
+```
+
+This aligns with your existing:
+
+```
+SERVICE
+    |
+    | manages
+    ↓
+PROCESS
+```
+
+So:
+
+```python
+relationship_type="manages"
+```
+
+---
+
+# 3. Process → Database
+
+Current:
+
+```python
+relationship_type="connects_to"
+```
+
+This is good.
+
+Graph:
+
+```
+PROCESS
+    |
+    | connects_to
+    ↓
+DATABASE
+```
+
+Example:
+
+```
+python app
+    |
+    | connects_to
+    ↓
+postgres
+```
+
+Keep it.
+
+---
+
+# 4. Database Query → Process
+
+Current:
+
+```python
+relationship_type="executed_by"
+```
+
+Very good.
+
+Graph:
+
+```
+DATABASE_QUERY
+       |
+       | executed_by
+       ↓
+PROCESS
+```
+
+Example:
+
+```
+SELECT * FROM users
+          |
+          | executed_by
+          ↓
+java application
+```
+
+Keep it.
+
+---
+
+# 5. Application → Database
+
+Current:
+
+```python
+relationship_type="uses"
+```
+
+This one is important.
+
+Graph:
+
+```
+APPLICATION
+       |
+       | uses
+       ↓
+DATABASE
+```
+
+This is actually a very good relationship name.
+
+Example:
+
+```
+Banking Application
+          |
+          | uses
+          ↓
+Oracle Database
+```
+
+Keep it.
+
+---
+
+# Important issue: application relationship changed earlier
+
+Earlier we discussed changing:
+
+```python
+relationship_type="runs"
+```
+
+to:
+
+```python
+relationship_type="has_process"
+```
+
+Your current code has:
+
+```python
+if app.relationship_type != "runs":
+    continue
+```
+
+So if you change application relationship naming, this will break.
+
+Either keep:
+
+```python
+application → process = runs
+```
+
+or update:
+
+```python
+if app.relationship_type != "has_process":
+```
+
+I personally prefer:
+
+```
+APPLICATION
+       |
+       | has_process
+       ↓
+PROCESS
+```
+
+because it is clearer.
+
+---
+
+# Recommended Galaxy database vocabulary
+
+Your database graph would become:
+
+```
+HOST
+ |
+ | runs
+ ↓
+PROCESS
+ |
+ | connects_to
+ ↓
+DATABASE
+
+
+SERVICE
+ |
+ | manages
+ ↓
+DATABASE
+
+
+DATABASE
+ |
+ | has_session
+ ↓
+DATABASE_CONNECTION
+
+
+DATABASE_QUERY
+ |
+ | executed_by
+ ↓
+PROCESS
+
+
+APPLICATION
+ |
+ | uses
+ ↓
+DATABASE
+```
+
+This reads naturally.
+
+---
+
+# One architectural concern
+
+These functions:
+
+```python
+if engine in service_name
+```
+
+and:
+
+```python
+if engine in name
+```
+
+are currently heuristic matching.
+
+Example:
+
+```text
+process name = postgres
+database engine = postgresql
+```
+
+works.
+
+But:
+
+```text
+process name = java
+database engine = postgres
+```
+
+fails.
+
+Later, the stronger approach is:
+
+```
+PROCESS
+   |
+   | owns_connection
+   ↓
+DATABASE_CONNECTION
+   |
+   | belongs_to
+   ↓
+DATABASE
+```
+
+Then you don't need name matching.
+
+But for your current Galaxy stage, these relationships are a reasonable first implementation.
+
+
+
+
+
+Overall: **relationship naming is 90% correct. Only change `service → database` from `provides` to `manages`, and keep application relationship naming consistent.**
+
+Yes. **If Galaxy needs to support multiple hosts, then you should change it now to use `host_observations` rather than hardcoding `"localhost"`**.
+
+The important point is: **don't just add the nested loop blindly**. Each process/service observation must belong to the correct host.
+
+### 1. Change the function signature
+
+From:
+
+```python
+def host_relationships(
+    process_observations,
+    service_observations,
+):
+```
+
+to:
+
+```python
+def host_relationships(
+    host_observations,
+    process_observations,
+    service_observations,
+):
+```
+
+### 2. Host → Process
+
+If each process observation contains a host identifier, use it to match:
+
+```python
+for process_observation in process_observations:
+
+    process_host = process_observation.data.get("host")
+
+    if process_host is None:
+        continue
+
+    for host_observation in host_observations:
+
+        if process_host != host_observation.entity_id:
+            continue
+
+        relationships.append(
+            Relationship(
+                source_entity_type="host",
+                source_entity_id=host_observation.entity_id,
+
+                relationship_type="runs",
+
+                target_entity_type="process",
+                target_entity_id=process_observation.entity_id,
+
+                timestamp=process_observation.timestamp,
+            )
+        )
+```
+
+### 3. Host → Service
+
+Same idea:
+
+```python
+for service_observation in service_observations:
+
+    service_host = service_observation.data.get("host")
+
+    if service_host is None:
+        continue
+
+    for host_observation in host_observations:
+
+        if service_host != host_observation.entity_id:
+            continue
+
+        relationships.append(
+            Relationship(
+                source_entity_type="host",
+                source_entity_id=host_observation.entity_id,
+
+                relationship_type="runs",
+
+                target_entity_type="service",
+                target_entity_id=service_observation.entity_id,
+
+                timestamp=service_observation.timestamp,
+            )
+        )
+```
+
+### 4. The important missing part
+
+Your current process observation does **not** have:
+
+```python
+"host": "localhost"
+```
+
+It currently has:
+
+```python
+data={
+    "pid": ...,
+    "name": ...,
+    "cpu_percent": ...,
+    ...
+}
+```
+
+For multi-host Galaxy, add host identity to the observation:
+
+```python
+data={
+    "host": "localhost",
+    "pid": ...,
+    "name": ...,
+    ...
+}
+```
+
+Likewise, your service observation needs:
+
+```python
+data={
+    "host": "localhost",
+    ...
+}
+```
+
+Then the architecture becomes:
+
+```text
+Host A
+ ├── runs → Process A1
+ ├── runs → Process A2
+ └── runs → PostgreSQL
+
+
+Host B
+ ├── runs → Process B1
+ ├── runs → Process B2
+ └── runs → MySQL
+```
+
+And **this is much safer than doing:**
+
+```python
+for host in host_observations:
+    for process in process_observations:
+```
+
+because that would incorrectly connect **every process to every host**.
+
+So if multi-host is a future goal for Galaxy, I recommend we make the observation model host-aware now, before building the Correlation Engine.
