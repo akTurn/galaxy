@@ -77,6 +77,7 @@ class ServiceCollector(Collector):
                     # },
 
                     data={
+                        "host": "localhost",
                         "identity": {
                             "name": service_name,
                             "unit": unit,

@@ -444,7 +444,7 @@ class Orchestrator:
             process_observations
         )
 
-        print("QUERY PROCESS RELATIONSHIPS:", relationships)
+        #print("QUERY PROCESS RELATIONSHIPS:", relationships)
 
         all_relationships.extend(
             relationships
