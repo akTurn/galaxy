@@ -1,4 +1,5 @@
 from core.storage.sqlite_store import SQLiteStore
+from collections import deque
 
 
 class MachineGraph:
@@ -100,6 +101,119 @@ class MachineGraph:
                 results.append(relationship)
 
         return results
+
+
+    def find_entities(
+        self,
+        entity_type=None,
+        keyword=None
+    ):
+
+        observations = self.store.all()
+
+        results=[]
+
+        for obs in observations:
+
+            if entity_type:
+                if obs.entity_type != entity_type:
+                    continue
+
+
+            if keyword:
+
+                text = str(obs.data).lower()
+
+                if keyword.lower() not in text:
+                    continue
+
+
+            results.append(obs)
+
+
+        return results
+
+
+    def impact_analysis(
+        self,
+        entity_id
+    ):
+
+        incoming = self.get_incoming(entity_id)
+
+        outgoing = self.get_outgoing(entity_id)
+
+        return {
+            "affected_by": incoming,
+            "affects": outgoing
+        }
+
+
+  
+
+
+
+
+    def shortest_path(
+            self,
+            start_entity_id,
+            target_entity_id
+    ):
+
+        relationships = self.store.current_relationships()
+
+
+        queue = deque()
+
+        queue.append(
+            (
+                start_entity_id,
+                [start_entity_id]
+            )
+        )
+
+
+        visited = set()
+
+        visited.add(
+            start_entity_id
+        )
+
+
+        while queue:
+
+
+            current, path = queue.popleft()
+
+
+            if current == target_entity_id:
+                return path
+
+
+
+            for neighbor in self.get_neighbors(
+                    current,
+                    relationships
+            ):
+
+                next_entity = neighbor["entity_id"]
+
+
+                if next_entity not in visited:
+
+                    visited.add(
+                        next_entity
+                    )
+
+                    queue.append(
+                        (
+                            next_entity,
+                            path + [next_entity]
+                        )
+                    )
+
+
+        return []
 
     # def get_neighbors(self, entity_id):
 

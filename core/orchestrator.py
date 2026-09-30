@@ -10,7 +10,12 @@ from core.relationships.process import process_relationships
 from core.relationships.network import network_relationships
 from core.relationships.service import service_relationships
 from core.relationships.log import log_relationships
+from core.relationships.system import host_relationships
 from core.relationships.application import application_relationships
+from core.relationships.database_query_table import query_table_relationships
+from core.relationships.database_table_column import table_column_relationships
+from core.relationships.database_foreign_key import foreign_key_relationships
+
 from collectors.unix_socket import UnixSocketCollector
 
 from core.relationships.unix_socket import (
@@ -24,7 +29,7 @@ from core.relationships.database import (
     #database_query_relationships,
     database_lock_relationships,
     database_table_relationships,
-    query_table_relationships,
+   # query_table_relationships,
     query_process_relationships,
     unix_socket_database_relationships,
     database_instance_relationships,
@@ -93,6 +98,9 @@ class Orchestrator:
             if observation.entity_type == "process"
         ]
 
+
+
+
         lifecycle = self.lifecycle_tracker.update(
             process_observations
         )
@@ -122,7 +130,7 @@ class Orchestrator:
             )
 
         # --------------------------------
-        # 4. Build identity map
+        # Build identity map
         # --------------------------------
 
         identity_map = ProcessIdentityMap(
@@ -130,7 +138,7 @@ class Orchestrator:
         )
 
         # -------------------------
-        # 5. Derive relationships
+        #  Derive relationships
         # -------------------------
 
         all_relationships = []
@@ -144,6 +152,22 @@ class Orchestrator:
 
             all_relationships.extend(
                 relationships
+            )
+
+        # --------------------------------
+        # Host -> Process relationships
+        # --------------------------------
+
+        
+
+        for observation in process_observations:
+
+            relationship = host_relationships(
+                observation
+            )
+
+            all_relationships.append(
+                relationship
             )
 
 
@@ -414,6 +438,8 @@ class Orchestrator:
             process_observations
         )
 
+        print("QUERY PROCESS RELATIONSHIPS:", relationships)
+
         all_relationships.extend(
             relationships
         )
@@ -556,7 +582,43 @@ class Orchestrator:
                         )
         
         
+        # -------------------------
+        # Table → Column relationships
+        # -------------------------
 
+        database_column_observations = [
+            x for x in all_observations
+            if x.entity_type == "database_column"
+        ]
+
+
+        relationships = table_column_relationships(
+            table_observations,
+            database_column_observations
+        )
+
+        all_relationships.extend(
+            relationships
+        )
+
+        # -------------------------
+        # Foreign Key relationships
+        # -------------------------
+
+        database_foreign_key_observations = [
+            x for x in all_observations
+            if x.entity_type == "database_foreign_key"
+        ]
+
+
+        relationships = foreign_key_relationships(
+            database_foreign_key_observations,
+            table_observations
+        )
+
+        all_relationships.extend(
+            relationships
+        )
 
         # -------------------------
         # 10. Save relationships

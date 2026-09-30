@@ -1,0 +1,1229 @@
+Good. We should fix these two issues **before moving forward**.
+
+We have two improvements:
+
+1. **Make Query → Process relationship more reliable**
+2. **Improve Query → Table dependency detection**
+
+Let's do them one by one.
+
+---
+
+# Part 1: Improve Query → Process relationship
+
+## Current problem
+
+You are matching:
+
+```
+PostgreSQL PID
+        =
+Linux PID
+```
+
+Currently:
+
+```python
+pid = query.data["query"].get("pid")
+
+process_map.get(str(pid))
+```
+
+This works for PostgreSQL on Linux because:
+
+```
+PostgreSQL backend PID
+        |
+        |
+        v
+Linux process PID
+```
+
+usually is the same.
+
+Example:
+
+PostgreSQL:
+
+```
+pg_stat_activity
+
+pid = 13037
+```
+
+Linux:
+
+```
+ps aux
+
+postgres 13037
+```
+
+Works.
+
+---
+
+## Improvement: Store process identity, not only PID
+
+Your GALAXY already has a stronger process identity concept:
+
+```
+ProcessIdentity
+```
+
+because PID can be reused.
+
+Example:
+
+Today:
+
+```
+PID 13037
+postgres query
+```
+
+Tomorrow:
+
+```
+PID 13037
+another process
+```
+
+PID alone is not permanent.
+
+---
+
+## Change Process Observation
+
+Your ProcessCollector should expose:
+
+```python
+data={
+ "process":{
+     "pid":13037,
+     "name":"postgres",
+     "create_time":1727600000,
+     "exe":"/usr/lib/postgresql/postgres"
+ }
+}
+```
+
+---
+
+## Query observation add backend information
+
+Modify query collector:
+
+```sql
+SELECT
+
+pid,
+
+backend_start,
+
+usename,
+
+datname,
+
+state,
+
+query
+
+FROM pg_stat_activity;
+```
+
+Now query observation:
+
+```python
+"query":{
+    
+    "pid":13037,
+
+    "backend_start":
+    "2026-09-29 10:50:00",
+
+    "sql":
+    "SELECT * FROM expenses"
+
+}
+```
+
+---
+
+## Relationship improvement
+
+Instead of only:
+
+```
+pid == pid
+```
+
+do:
+
+```
+pid match
++
+process name postgres
+```
+
+Example:
+
+```python
+def query_process_relationships(
+        query_observations,
+        process_observations
+):
+
+    relationships=[]
+
+
+    process_map={
+
+        str(p.data["process"]["pid"]):
+        p
+
+        for p in process_observations
+
+        if p.data["process"]["name"]
+        and
+        "postgres"
+        in
+        p.data["process"]["name"]
+
+    }
+
+
+    for query in query_observations:
+
+
+        pid=query.data["query"].get("pid")
+
+
+        process=process_map.get(
+            str(pid)
+        )
+
+
+        if not process:
+            continue
+
+
+        relationships.append(
+            Relationship(
+
+            source_entity_type=
+            "database_query",
+
+            source_entity_id=
+            query.entity_id,
+
+            relationship_type=
+            "executed_by",
+
+            target_entity_type=
+            "process",
+
+            target_entity_id=
+            process.entity_id,
+
+            timestamp=query.timestamp
+
+            )
+        )
+
+
+    return relationships
+```
+
+Now:
+
+```
+database_query
+        |
+   executed_by
+        |
+        v
+postgres process
+```
+
+is safer.
+
+---
+
+# Part 2: Fix Query → Table relationship
+
+Your current method:
+
+```python
+if re.search(pattern, sql):
+```
+
+is a simple parser.
+
+Works:
+
+```sql
+SELECT *
+FROM expenses;
+```
+
+But problems:
+
+---
+
+## Problem 1
+
+Column name confusion.
+
+Example:
+
+Table:
+
+```
+customers
+```
+
+Query:
+
+```sql
+SELECT customers
+FROM orders;
+```
+
+Your parser thinks:
+
+```
+query
+ |
+accesses
+ |
+customers table
+```
+
+Wrong.
+
+---
+
+## Problem 2
+
+SQL aliases.
+
+Example:
+
+```sql
+SELECT e.amount
+
+FROM expenses e;
+```
+
+The actual table:
+
+```
+expenses
+```
+
+but query contains:
+
+```
+e
+```
+
+Future complex queries fail.
+
+---
+
+# Better solution: PostgreSQL EXPLAIN
+
+Let PostgreSQL parse SQL.
+
+Database already understands SQL.
+
+Use:
+
+```sql
+EXPLAIN (FORMAT JSON)
+
+SELECT *
+FROM expenses;
+```
+
+Output:
+
+```json
+[
+ {
+  "Plan":{
+    "Node Type":"Seq Scan",
+    "Relation Name":"expenses",
+    "Schema":"public"
+  }
+ }
+]
+```
+
+PostgreSQL tells us:
+
+```
+Query
+ |
+uses
+ |
+public.expenses
+```
+
+---
+
+# Implement collector
+
+Create:
+
+```
+collectors/database/query_dependency.py
+```
+
+Example:
+
+```python
+import subprocess
+import json
+
+
+class QueryDependencyCollector:
+
+
+    def collect(self, database, sql):
+
+
+        result=subprocess.run(
+
+        [
+        "sudo",
+        "-u",
+        "postgres",
+        "psql",
+        "-d",
+        database,
+        "-t",
+        "-A",
+        "-c",
+        f"""
+        EXPLAIN (FORMAT JSON)
+        {sql}
+        """
+        ],
+
+        capture_output=True,
+        text=True
+
+        )
+
+
+        return json.loads(
+            result.stdout
+        )
+```
+
+---
+
+Then extract tables:
+
+```python
+def extract_tables(plan):
+
+    tables=[]
+
+
+    if isinstance(plan,dict):
+
+        if "Relation Name" in plan:
+
+            tables.append(
+                (
+                plan["Schema"],
+                plan["Relation Name"]
+                )
+            )
+
+
+        for value in plan.values():
+
+            tables.extend(
+                extract_tables(value)
+            )
+
+
+    elif isinstance(plan,list):
+
+        for item in plan:
+
+            tables.extend(
+                extract_tables(item)
+            )
+
+
+    return tables
+```
+
+---
+
+Now:
+
+Input:
+
+```sql
+SELECT *
+FROM expenses e
+JOIN users u
+ON e.user_id=u.id;
+```
+
+PostgreSQL returns:
+
+```
+expenses
+users
+```
+
+Galaxy creates:
+
+```
+database_query
+
+       |
+    accesses
+
+       |
+
+expenses
+
+
+database_query
+
+       |
+    accesses
+
+       |
+
+users
+```
+
+---
+
+# After these fixes your graph becomes:
+
+```
+                 database_query
+                       |
+          --------------------------
+          |                        |
+          |                        |
+    executed_by              accesses
+          |                        |
+          v                        v
+
+ postgres process          database_table
+          |                        |
+       CPU/memory              index
+```
+
+---
+
+So the order:
+
+✅ Fix Query → Process identity
+✅ Replace regex Query → Table with EXPLAIN
+➡️ Then move to Foreign Keys / Columns
+
+This will make your database graph much more accurate.
+
+
+
+
+Good. You are at the correct point now. Before foreign keys, **query history** is the right next improvement.
+
+Currently your flow is:
+
+```
+PostgreSQL
+    |
+    v
+pg_stat_activity
+    |
+    v
+DatabaseQueryCollector
+    |
+    v
+Observation
+    |
+    v
+SQLite observations table
+```
+
+Your collector already captures:
+
+```
+pid
+sql
+state
+query_start
+duration_seconds
+wait_event
+```
+
+But your SQLite storage only stores the **current observation snapshot**.
+
+Every run:
+
+```
+run_once()
+   |
+   v
+save(observations)
+```
+
+creates a new row.
+
+That is actually already a kind of history.
+
+Example:
+
+```
+observations table
+
+id | entity_type       | entity_id                         | timestamp
+---------------------------------------------------------------------------
+1  | database_query    | postgres:query:finance_db:13037    | 10:54
+2  | database_query    | postgres:query:finance_db:13037    | 10:55
+3  | database_query    | postgres:query:finance_db:13037    | 10:56
+4  | database_query    | postgres:query:finance_db:13037    | 10:57
+```
+
+But the problem:
+
+```
+entity_id
+```
+
+is the same:
+
+```
+postgresql:query:finance_db:13037
+```
+
+So you cannot easily answer:
+
+> How many times did this query run?
+
+or:
+
+> What was the average duration?
+
+---
+
+## Step 1: Separate query identity from query execution
+
+In database systems, these are different things.
+
+### Query identity
+
+Example:
+
+```sql
+SELECT * FROM expenses;
+```
+
+This is the same query every time.
+
+Identity:
+
+```
+query_hash = abc123
+```
+
+---
+
+### Query execution
+
+Every time it runs:
+
+```
+execution_id = 1
+execution_id = 2
+execution_id = 3
+```
+
+Different execution.
+
+So your model should become:
+
+```
+database_query
+        |
+        |
+        +---- query_definition
+        |
+        +---- execution_history
+```
+
+---
+
+## Step 2: Add query hash
+
+In your collector:
+
+```python
+import hashlib
+```
+
+Create:
+
+```python
+def query_hash(sql):
+
+    if not sql:
+        return None
+
+    normalized = sql.lower().strip()
+
+    return hashlib.md5(
+        normalized.encode()
+    ).hexdigest()
+```
+
+Example:
+
+Input:
+
+```sql
+SELECT * FROM expenses;
+```
+
+Output:
+
+```
+a92bc3347a...
+```
+
+---
+
+Then your observation becomes:
+
+```python
+"query":{
+
+    "pid":pid,
+
+    "sql":query,
+
+    "query_hash":query_hash(query),
+
+    "duration_seconds":duration,
+
+    "state":state,
+
+    "query_start":query_start
+}
+```
+
+---
+
+Now you can identify:
+
+```
+Same SQL
+   |
+   |
+same query_hash
+```
+
+---
+
+# Step 3: Create query history table
+
+Do not put history inside observations.
+
+Create a dedicated table.
+
+In SQLiteStore:
+
+```python
+def _create_query_history_table(self):
+
+    self.conn.execute("""
+        CREATE TABLE IF NOT EXISTS query_history(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            query_hash TEXT,
+
+            database_name TEXT,
+
+            pid TEXT,
+
+            sql TEXT,
+
+            start_time TEXT,
+
+            duration_seconds REAL,
+
+            state TEXT,
+
+            timestamp TEXT
+        )
+    """)
+
+    self.conn.commit()
+```
+
+Call it from:
+
+```python
+__init__
+```
+
+```python
+self._create_query_history_table()
+```
+
+---
+
+# Step 4: Save query executions
+
+Add:
+
+```python
+def save_query_history(self, observations):
+
+    rows=[]
+
+
+    for obs in observations:
+
+        if obs.entity_type != "database_query":
+            continue
+
+
+        q = obs.data["query"]
+
+
+        rows.append(
+            (
+                q["query_hash"],
+                q["database"],
+                q["pid"],
+                q["sql"],
+                q["query_start"],
+                q["duration_seconds"],
+                q["state"],
+                obs.timestamp.isoformat()
+            )
+        )
+
+
+    self.conn.executemany(
+    """
+    INSERT INTO query_history
+    (
+        query_hash,
+        database_name,
+        pid,
+        sql,
+        start_time,
+        duration_seconds,
+        state,
+        timestamp
+    )
+    VALUES (?,?,?,?,?,?,?,?)
+    """,
+    rows
+    )
+
+
+    self.conn.commit()
+```
+
+---
+
+# Step 5: Call it from Orchestrator
+
+Currently:
+
+```python
+store.save(observations)
+```
+
+Change:
+
+```python
+store.save(observations)
+
+store.save_query_history(
+    observations
+)
+```
+
+---
+
+Now your database contains:
+
+## Current state
+
+```
+observations
+
+database_query
+        |
+        |
+        v
+current running query
+```
+
+---
+
+## Historical intelligence
+
+```
+query_history
+
+
+SELECT * FROM expenses
+
+10:00  5 sec
+10:05  7 sec
+10:10  180 sec
+10:15  200 sec
+```
+
+---
+
+Now GALAXY can reason:
+
+```
+database_query
+        |
+        |
+      has_history
+        |
+        v
+query_history
+```
+
+Then later:
+
+```
+query_history
+        |
+        |
+     slow_query
+        |
+        |
+ performance_issue
+```
+
+---
+
+# One more important improvement
+
+Your current query collector captures only **currently running queries**:
+
+```sql
+FROM pg_stat_activity
+```
+
+After query finishes:
+
+```
+query disappears
+```
+
+So history is impossible unless you collect while running.
+
+For real database intelligence later, add:
+
+```
+pg_stat_statements
+```
+
+PostgreSQL extension.
+
+It gives:
+
+```
+query text
+number of calls
+total execution time
+average time
+rows returned
+```
+
+Example:
+
+```
+SELECT * FROM expenses
+
+calls: 5000
+
+total_time: 500 seconds
+
+average:
+100 ms
+```
+
+That is production-grade monitoring.
+
+---
+
+For GALAXY roadmap, I would do:
+
+```
+DONE
+ |
+ Query Collector
+ |
+ Query → Lock
+ |
+ Query → Process
+ |
+ Query → Table
+ |
+ NOW
+ |
+ Query History       <-- implement this
+ |
+ pg_stat_statements
+ |
+ Foreign Keys
+ |
+ Columns
+ |
+ Graph
+```
+
+Your current collector output is already good. The missing piece is **storing executions over time**, not collecting more data.
+
+
+
+For GALAXY architecture, the **first approach is better**:
+
+```text
+_get_databases()
+        |
+        |
+_collect_columns(database)
+```
+
+Meaning:
+
+```python
+DatabaseColumnCollector.collect()
+```
+
+should behave like your `DatabaseTableCollector`.
+
+---
+
+### Why?
+
+Because GALAXY is monitoring the whole system, not one application database.
+
+Today:
+
+```
+PostgreSQL Server
+        |
+        +-- finance_db
+        |
+        +-- personal_finance
+        |
+        +-- another_db
+```
+
+Tomorrow you may have:
+
+```
+PostgreSQL
+        |
+        +-- 20 databases
+```
+
+Your Orchestrator should not know database names.
+
+The collector should handle discovery.
+
+---
+
+## Current design
+
+Your table collector:
+
+```python
+class DatabaseTableCollector:
+
+    def collect(self):
+
+        observations=[]
+
+        databases = self._get_databases()
+
+        for database in databases:
+
+            observations.extend(
+                self._collect_tables(database)
+            )
+
+        return observations
+```
+
+This is good.
+
+Your column collector should match:
+
+```python
+class DatabaseColumnCollector:
+
+    def collect(self):
+
+        observations=[]
+
+        databases = self._get_databases()
+
+        for database in databases:
+
+            observations.extend(
+                self._collect_columns(database)
+            )
+
+        return observations
+```
+
+---
+
+Then your DatabaseManager becomes cleaner:
+
+Before:
+
+```python
+for instance in database_instances:
+
+    database_name = instance.data["database"]["name"]
+
+    observations.extend(
+        self.column_collector.collect(database_name)
+    )
+```
+
+After:
+
+```python
+observations.extend(
+    self.column_collector.collect()
+)
+```
+
+Much better.
+
+---
+
+## Why not pass database_name?
+
+This:
+
+```python
+DatabaseColumnCollector.collect(database_name)
+```
+
+is useful when:
+
+* you have a user-selected database
+* you are debugging one database
+* you want targeted scanning
+
+Example:
+
+```python
+python scan.py finance_db
+```
+
+But GALAXY is a monitoring engine.
+
+Its responsibility is:
+
+```
+discover
+collect
+normalize
+store
+analyze
+```
+
+So discovery belongs inside the collector.
+
+---
+
+## I would make all database schema collectors consistent:
+
+### Table
+
+```python
+DatabaseTableCollector.collect()
+```
+
+### Column
+
+```python
+DatabaseColumnCollector.collect()
+```
+
+### Index
+
+```python
+DatabaseIndexCollector.collect()
+```
+
+### Foreign key
+
+```python
+DatabaseForeignKeyCollector.collect()
+```
+
+All internally:
+
+```
+_get_databases()
+
+        |
+        |
++-------+-------+-------+
+|       |       |       |
+table column index fk
+```
+
+---
+
+Then your DatabaseManager becomes simple:
+
+```python
+observations.extend(
+    self.table_collector.collect()
+)
+
+observations.extend(
+    self.column_collector.collect()
+)
+
+observations.extend(
+    self.index_collector.collect()
+)
+
+observations.extend(
+    self.foreign_key_collector.collect()
+)
+```
+
+This is more aligned with the GALAXY idea:
+
+> Collectors know how to find things.
+> Orchestrator only coordinates collectors.
+
+So I would refactor `ColumnCollector` and `IndexCollector` to follow `TableCollector`. This will make the next steps (database statistics, graph visualization) much easier.
+

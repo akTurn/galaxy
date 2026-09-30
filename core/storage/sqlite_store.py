@@ -28,17 +28,42 @@ class SQLiteStore:
 
 
     def _create_table(self):
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS observations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source TEXT,
-                entity_type TEXT,
-                entity_id TEXT,
-                timestamp TEXT,
-                data TEXT
-            )
-        """)
+        # self.conn.execute("""
+        #     CREATE TABLE IF NOT EXISTS observations (
+        #         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        #         source TEXT,
+        #         entity_type TEXT,
+        #         entity_id TEXT,
+        #         timestamp TEXT,
+        #         data TEXT
+        #     )
+        # """)
         #self.conn.commit()
+        #/**********************DEDUPLICATION -ADD Add unique constraints***************/
+
+        self.conn.execute("""
+        CREATE TABLE IF NOT EXISTS observations (
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            source TEXT,
+
+            entity_type TEXT,
+
+            entity_id TEXT,
+
+            timestamp TEXT,
+
+            data TEXT,
+
+            UNIQUE(
+                source,
+                entity_type,
+                entity_id,
+                data
+            )
+        )
+    """)
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS lifecycle_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,8 +112,11 @@ class SQLiteStore:
         ]
 
         self.conn.executemany(
+            # """
+            # INSERT INTO observations
+            # """
             """
-            INSERT INTO observations
+                INSERT OR IGNORE INTO observations
                 (source, entity_type, entity_id, timestamp, data)
             VALUES (?, ?, ?, ?, ?)
             """,
@@ -217,17 +245,41 @@ class SQLiteStore:
     # -------------------------
 
     def _create_relationships_table(self):
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS relationships (
+        # self.conn.execute("""
+        #     CREATE TABLE IF NOT EXISTS relationships (
+        #         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        #         source_entity_type TEXT,
+        #         source_entity_id TEXT,
+        #         relationship_type TEXT,
+        #         target_entity_type TEXT,
+        #         target_entity_id TEXT,
+        #         timestamp TEXT
+        #     )
+        # """)
+        self.conn.execute(
+        """CREATE TABLE IF NOT EXISTS relationships (
+
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+
                 source_entity_type TEXT,
+
                 source_entity_id TEXT,
+
                 relationship_type TEXT,
+
                 target_entity_type TEXT,
+
                 target_entity_id TEXT,
-                timestamp TEXT
-            )
-        """)
+
+                timestamp TEXT,
+
+
+                UNIQUE(
+                    source_entity_id,
+                    relationship_type,
+                    target_entity_id
+                )
+            )""")
 
         self.conn.commit()
 
@@ -248,8 +300,23 @@ class SQLiteStore:
         ]
 
         self.conn.executemany(
+            #INSERT INTO relationships (
+            # Normal INSERT
+            # INSERT INTO relationships
+
+            # Means:
+
+            # "Insert this. If it already exists, fail."
+
+            # INSERT OR IGNORE
+            # INSERT OR IGNORE INTO relationships
+
+            # Means:
+
+            # "Insert this. If it already exists, silently skip."
+
             """
-            INSERT INTO relationships (
+            INSERT OR IGNORE INTO relationships(
                 source_entity_type,
                 source_entity_id,
                 relationship_type,

@@ -1,0 +1,496 @@
+Yes, your **Milestone 13 — Entity & Relationship Model is mostly completed**. Your output proves that Galaxy has moved beyond simple monitoring and is already building a graph.
+
+But your question about **host CPU/memory → process CPU/memory linking** is an important architectural point before moving to Milestone 14.
+
+Let's analyze.
+
+---
+
+## Current situation
+
+You have:
+
+### Host observation
+
+```python
+Observation(
+    source="system",
+    entity_type="host",
+    entity_id="localhost",
+    data={
+        "cpu": 95,
+        "memory": 80,
+        "disk": 50,
+        ...
+    }
+)
+```
+
+This represents:
+
+```
+host:localhost
+        |
+        |
+        ?
+        |
+        |
+processes
+```
+
+---
+
+### Process observation
+
+Example:
+
+```
+process:pid:8272@1790765575.66
+
+data:
+{
+ "pid":8272,
+ "name":"python",
+ "cpu_percent":88,
+ "memory_percent":5,
+ ...
+}
+```
+
+This represents:
+
+```
+process
+ |
+ ├── cpu=88%
+ ├── memory=5%
+```
+
+---
+
+## Your current relationship
+
+You already have:
+
+```
+host:localhost
+       |
+       | hosts
+       |
+       v
+process:pid:8272@1790765575.66
+```
+
+This comes from your relationship builder:
+
+```
+host
+  |
+  hosts
+  |
+process
+```
+
+So the graph knows:
+
+> This process belongs to this machine.
+
+Example:
+
+```
+localhost
+   |
+   +-- hosts --> python PID 8272
+```
+
+That part is correct.
+
+---
+
+# Your doubt
+
+> Both have resource details but graph not showing how to link that
+
+The answer:
+
+**Resource values should not be relationships.**
+
+CPU and memory are not graph edges.
+
+They are properties of nodes.
+
+Think like this:
+
+```
+Host Node
+============
+ID:
+localhost
+
+Attributes:
+CPU: 95%
+Memory: 80%
+
+
+
+        hosts
+
+
+Process Node
+============
+ID:
+pid:8272
+
+Attributes:
+CPU:88%
+Memory:5%
+```
+
+The relationship only connects entities.
+
+The observations contain measurements.
+
+---
+
+## So your graph should look like:
+
+```
+                 HOST
+              localhost
+
+        CPU:95%
+        Memory:80%
+              |
+              |
+            hosts
+              |
+              |
+              v
+
+
+          PROCESS
+       pid:8272
+
+       CPU:88%
+       Memory:5%
+
+              |
+              |
+            runs
+              |
+              v
+
+        APPLICATION
+          Galaxy
+```
+
+---
+
+# How correlation engine will use this later
+
+Milestone 14 will not ask:
+
+"Does host have CPU?"
+
+It will ask:
+
+```
+Host CPU high?
+       |
+       |
+       v
+
+Find processes on host
+       |
+       |
+       v
+
+Which process consumes most CPU?
+       |
+       |
+       v
+
+Which application owns that process?
+       |
+       |
+       v
+
+What database/logs are connected?
+```
+
+Example:
+
+Your current graph already supports:
+
+```
+host:localhost
+
+   hosts
+
+process:pid:8272
+
+
+   executed_by
+
+database_query:finance_db:8272
+
+
+   reads
+
+table:expenses
+```
+
+So Galaxy can reason:
+
+```
+CPU spike
+ |
+ |
+PID 8272 high CPU
+ |
+ |
+PostgreSQL query running
+ |
+ |
+Query reads expenses table
+ |
+ |
+Slow query log appears
+```
+
+---
+
+# But one thing is missing
+
+Your graph currently has:
+
+```
+host
+ |
+ hosts
+ |
+process
+```
+
+Good.
+
+But you need one more relationship:
+
+```
+process
+ |
+ runs
+ |
+application
+```
+
+or
+
+```
+application
+ |
+ owns
+ |
+process
+```
+
+You already have some:
+
+```
+application:5e2a80e4914ce6de
+
+  runs
+
+process:pid:1681
+process:pid:1695
+```
+
+Good.
+
+Now the chain becomes possible:
+
+```
+HOST
+ |
+ hosts
+ |
+PROCESS
+ |
+ runs
+ |
+APPLICATION
+ |
+ uses
+ |
+DATABASE
+ |
+ executes
+ |
+QUERY
+ |
+ reads
+ |
+TABLE
+```
+
+This is exactly the foundation for correlation.
+
+---
+
+# Your current Milestone 13 status
+
+I would mark:
+
+| Component                  | Status |
+| -------------------------- | ------ |
+| Host entity                | ✅      |
+| Process entity             | ✅      |
+| Application entity         | ✅      |
+| Service entity             | ✅      |
+| Database entity            | ✅      |
+| Network entity             | ✅      |
+| Log entity                 | ✅      |
+| Relationship storage       | ✅      |
+| Relationship traversal     | ✅      |
+| Current graph filtering    | ✅      |
+| Historical process cleanup | ✅      |
+| Process identity           | ✅      |
+| Database query → process   | ✅      |
+
+Only missing small improvements:
+
+### 1. Host → Service relationship
+
+Currently:
+
+```
+host
+ |
+ hosts
+ |
+process
+```
+
+Need:
+
+```
+host
+ |
+ runs
+ |
+service
+```
+
+Example:
+
+```
+localhost
+ |
+ runs
+ |
+mysql.service
+```
+
+---
+
+### 2. Application → Log relationship
+
+Need:
+
+```
+application
+ |
+ produces
+ |
+log
+```
+
+Example:
+
+```
+Flask Finance App
+        |
+        produces
+        |
+        slow query log
+```
+
+---
+
+### 3. Resource history
+
+Currently:
+
+```
+process
+cpu=88
+```
+
+is only current observation.
+
+Later correlation needs history:
+
+```
+12:00 CPU 10%
+12:01 CPU 30%
+12:02 CPU 90%
+```
+
+Your observations table already supports this.
+
+---
+
+## About Milestone 14
+
+You are actually ready to start it.
+
+Your first correlation rule can be very simple:
+
+```
+IF
+
+host.cpu > 90
+
+THEN
+
+find processes on host
+sort by cpu_percent DESC
+
+THEN
+
+find application connected to process
+
+THEN
+
+find database queries connected to application
+```
+
+Your existing graph methods:
+
+```python
+shortest_path()
+get_neighbors()
+impact_analysis()
+traverse_current()
+```
+
+are already the foundation.
+
+The next thing I would build is:
+
+```
+core/correlation/
+    correlation_engine.py
+    rules.py
+    findings.py
+```
+
+The first rule:
+
+```
+HighCPUProcessRule
+```
+
+will use your graph.
+
+You are at the correct point to start Milestone 14.

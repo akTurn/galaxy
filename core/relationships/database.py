@@ -216,7 +216,7 @@ def application_database_relationships(
 
 import re
 
-def query_table_relationships(
+def query_table_relationshipsmodified(
         query_observations,
         table_observations
 ):
@@ -858,6 +858,53 @@ def database_index_relationships(
 
     return relationships
 
+def database_lock_relation_relationships(
+        lock_observations
+):
+
+    relationships=[]
+
+
+    for lock in lock_observations:
+
+        lock_data = lock.data["lock"]
+
+        relation_name = lock_data.get(
+            "relation_name"
+        )
+
+
+        if not relation_name:
+            continue
+
+
+        relationships.append(
+
+            Relationship(
+
+                source_entity_type="database_lock",
+
+                source_entity_id=lock.entity_id,
+
+                relationship_type="locks",
+
+                target_entity_type=(
+                    "database_relation"
+                ),
+
+                target_entity_id=(
+                    f"postgresql:"
+                    f"{lock.data['database']['name']}:"
+                    f"{lock_data['schema']}:"
+                    f"{relation_name}"
+                ),
+
+                timestamp=lock.timestamp
+            )
+        )
+
+
+    return relationships
 
 def database_index_relationshipswithoutLookup(
         table_observations,

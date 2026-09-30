@@ -5,6 +5,8 @@ from collectors.database.table import DatabaseTableCollector
 from collectors.database.instance import DatabaseInstanceCollector
 from collectors.database.health import DatabaseHealthCollector
 from collectors.database.index import DatabaseIndexCollector
+from collectors.database.column import DatabaseColumnCollector
+from collectors.database.foreign_key import DatabaseForeignKeyCollector
 
 
 class DatabaseManager:
@@ -18,6 +20,8 @@ class DatabaseManager:
         self.instance_collector = DatabaseInstanceCollector()
         self.health_collector = DatabaseHealthCollector()
         self.index_collector = DatabaseIndexCollector()
+        self.column_collector = DatabaseColumnCollector()
+        self.foreign_key_collector = DatabaseForeignKeyCollector()
 
         
 
@@ -41,12 +45,9 @@ class DatabaseManager:
         self.query_collector.collect()
         )
 
-        # database lock observations
-        observations.extend(
-            self.lock_collector.collect()
-        )
         
          # database Instance observations
+
         database_instances = self.instance_collector.collect()
 
         observations.extend(
@@ -63,14 +64,31 @@ class DatabaseManager:
             self.health_collector.collect()
         )
 
+        
+        # # database lock observations
+        # observations.extend(
+        #     self.lock_collector.collect()
+        # )
+           
+
+        for instance in database_instances:
+
+            database_name = (
+                instance.data["database"]["name"]
+            )
+
+            observations.extend(
+                self.lock_collector.collect(database_name)
+            )
+
+
         # database index observations
 
         # observations.extend(
         #     self.index_collector.collect()
         # )
 
-        
-        # indexes
+                
         for instance in database_instances:
 
             database_name = (
@@ -80,6 +98,27 @@ class DatabaseManager:
             observations.extend(
                 self.index_collector.collect(database_name)
             )
+
+
+        # database column observations
+
+        for instance in database_instances:
+
+            database_name = (
+                instance.data["database"]["name"]
+            )
+
+            observations.extend(
+                self.column_collector.collect()
+            )
+
+
+        # database foreign key observations
+
+        observations.extend(
+            self.foreign_key_collector.collect()
+        )
+
 
         return observations
 

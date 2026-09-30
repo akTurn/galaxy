@@ -1,6 +1,7 @@
 from core.orchestrator import Orchestrator
 from core.storage.sqlite_store import SQLiteStore
 from core.graph.machine_graph_display import MachineGraphDisplay
+from core.correlation.correlation_engine import CorrelationEngine
 
 import time
 
@@ -12,6 +13,7 @@ def main():
 
     orchestrator = Orchestrator()
     store = SQLiteStore()
+    correlation_engine = CorrelationEngine(store)
     display = MachineGraphDisplay()
 
     print("GALAXY")
@@ -35,24 +37,6 @@ def main():
 
             observations, relationships = orchestrator.run_once()
 
-            # ----------------------------------------
-            # Read services from storage
-            # ----------------------------------------
-
-            logs = [
-                observation
-                for observation in store.all()
-                if observation.entity_type == "log"
-            ]
-
-            print("Logs stored:", len(logs))
-
-            for log in logs[:10]:
-
-                print(
-                    log.entity_id,
-                    log.data
-                )
 
             # ----------------------------------------
             # Collection summary
@@ -63,6 +47,26 @@ def main():
                 f"Collected {len(observations)} observations, "
                 f"derived {len(relationships)} relationships"
             )
+
+            # ----------------------------------------
+            # Corelation 
+            # ----------------------------------------
+            
+            correlation_events = correlation_engine.analyze()
+
+            if correlation_events:
+
+                print()
+                print("CORRELATION EVENTS")
+                print("------------------")
+
+                for event in correlation_events:
+
+                    print(
+                        event
+                    )
+
+                print()
 
             # ----------------------------------------
             # Display machine graph

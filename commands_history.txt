@@ -1,0 +1,1216 @@
+  688  data={
+  689  'database':{'engine':'postgresql'},
+  690  'query':{
+  691  'sql':'select * from expenses'
+  692  }
+  693  }
+  694  )
+  695  t=Observation(
+  696  source='database',
+  697  entity_type='database_table',
+  698  entity_id='postgresql:finance_db:public:expenses',
+  699  timestamp=datetime.now(timezone.utc),
+  700  data={
+  701  'database':{
+  702  'engine':'postgresql',
+  703  'name':'finance_db'
+  704  },
+  705  'table':{
+  706  'name':'expenses'
+  707  }
+  708  }
+  709  )
+  710  print(query_table_relationships([q],[t]))
+  711  "
+  712  python -c "
+  713  from core.orchestrator import Orchestrator
+  714  o=Orchestrator()
+  715  obs,rel=o.run_once()
+  716  print(*[
+  717  r
+  718  for r in rel
+  719  if r.relationship_type=='accesses'
+  720  ],sep='\n')
+  721  "
+  722  python -c "
+  723  from core.orchestrator import Orchestrator
+  724  o=Orchestrator()
+  725  obs,rel=o.run_once()
+  726  print(*[
+  727  r
+  728  for r in rel
+  729  if r.relationship_type=='accesses'
+  730  ],sep='\n')
+  731  "
+  732  python -c "
+  733  from core.orchestrator import Orchestrator
+  734  o=Orchestrator()
+  735  obs,rel=o.run_once()
+  736  print('QUERIES')
+  737  print(*[
+  738  x.data['query']
+  739  for x in obs
+  740  if x.entity_type=='database_query'
+  741  ],sep='\n')
+  742  print('ACCESS')
+  743  print(*[
+  744  r
+  745  for r in rel
+  746  if r.relationship_type=='accesses'
+  747  ],sep='\n')
+  748  "
+  749  python -c "
+  750  from collectors.process import ProcessCollector
+  751  processes = ProcessCollector().collect()
+  752  for p in processes:
+  753      if p.data['pid'] == 25910:
+  754          print(p)
+  755  "
+  756  python -c "
+  757  from collectors.process import ProcessCollector
+  758  processes = ProcessCollector().collect()
+  759  for p in processes:
+  760      if p.data['pid'] == 25910:
+  761          print(p)
+  762  "
+  763  ps -p 25910 -o pid,lstart,etime,cmd
+  764  python -c "
+  765  from core.orchestrator import Orchestrator
+  766  o=Orchestrator()
+  767  obs,rel=o.run_once()
+  768  print(*[
+  769  r
+  770  for r in rel
+  771  if r.relationship_type=='executed_by'
+  772  ],sep='\n')
+  773  "
+  774  sudo lsof -p 25910 -i
+  775  sudo ss -ntp | grep 25910
+  776  sudo ss -ntp | grep postgres
+  777  python -c "
+  778  from collectors.network import NetworkCollector
+  779  obs=NetworkCollector().collect()
+  780  for x in obs:
+  781      if x.entity_type=='network_connection':
+  782          print(x.data)
+  783  "
+  784  sudo lsof -nP -p 337 -iTCP
+  785  python -c "
+  786  from collectors.network import NetworkCollector
+  787  obs = NetworkCollector().collect()
+  788  for x in obs:
+  789      if x.entity_type == 'network_connection':
+  790          if x.data.get('local_port') == 5432 or x.data.get('remote_port') == 5432:
+  791              print(x)
+  792  "
+  793  sudo lsof -U | grep PGSQL
+  794  sudo lsof -nP -U | grep -E 'PGSQL|postgres'
+  795  ps -p 25909 -o pid,ppid,user,cmd
+  796  ps -p 25908 -o pid,ppid,user,cmd
+  797  sudo -u postgres psql -d finance_db -c "
+  798  SELECT
+  799      pid,
+  800      usename,
+  801      datname,
+  802      client_addr,
+  803      client_port,
+  804      backend_type,
+  805      state,
+  806      query
+  807  FROM pg_stat_activity
+  808  WHERE pid = 25910;
+  809  "
+  810  nano collectors/unix_socket.py
+  811  core/relationships/unix_socket.py
+  812  core/relationship/unix_socket.py
+  813  core/relationships/unix_socket.py
+  814  nano core/relationships/unix_socket.py
+  815  python -c "
+  816  from collectors.unix_socket import UnixSocketCollector
+  817  obs = UnixSocketCollector().collect()
+  818  print('UNIX SOCKETS')
+  819  print('============')
+  820  for x in obs:
+  821      print(x)
+  822  "
+  823  python -c "
+  824  from collectors.process import ProcessCollector
+  825  from collectors.unix_socket import UnixSocketCollector
+  826  from core.relationships.unix_socket_relationships import (
+  827      query_unix_socket_relationships
+  828  )
+  829  processes = ProcessCollector().collect()
+  830  sockets = UnixSocketCollector().collect()
+  831  relationships = query_unix_socket_relationships(
+  832      processes,
+  833      sockets
+  834  )
+  835  print('RELATIONSHIPS')
+  836  print('=============')
+  837  for r in relationships:
+  838      print(r)
+  839  "
+  840  python -c "
+  841  from collectors.process import ProcessCollector
+  842  from collectors.unix_socket import UnixSocketCollector
+  843  from core.relationships.unix_socket import (
+  844      query_unix_socket_relationships
+  845  )
+  846  processes = ProcessCollector().collect()
+  847  sockets = UnixSocketCollector().collect()
+  848  relationships = query_unix_socket_relationships(
+  849      processes,
+  850      sockets
+  851  )
+  852  print('RELATIONSHIPS')
+  853  print('=============')
+  854  for r in relationships:
+  855      print(r)
+  856  "
+  857  python -c "
+  858  from core.orchestrator import Orchestrator
+  859  o = Orchestrator()
+  860  obs, rel = o.run_once()
+  861  print('UNIX SOCKET OBS')
+  862  print('===============')
+  863  for x in obs:
+  864      if x.entity_type == 'unix_socket':
+  865          print(x)
+  866  print()
+  867  print('CONNECTED THROUGH')
+  868  print('=================')
+  869  for r in rel:
+  870      if r.relationship_type == 'connected_through':
+  871          print(r)
+  872  "
+  873  python -c "
+  874  from collectors.unix_socket import UnixSocketCollector
+  875  for x in UnixSocketCollector().collect():
+  876      print(x)
+  877  "
+  878  python -c "
+  879  from core.orchestrator import Orchestrator
+  880  o=Orchestrator()
+  881  obs,rel=o.run_once()
+  882  for r in rel:
+  883      if r.relationship_type=='connected_through':
+  884          print(r)
+  885  "
+  886  python -c "
+  887  from collectors.unix_socket import UnixSocketCollector
+  888  c=UnixSocketCollector()
+  889  for x in c.collect():
+  890      if 'postgres' in x.data['socket_path'] or 'PGSQL' in x.data['socket_path']:
+  891          print(x)
+  892  "
+  893  git add .
+  894  git commit -m "Update Database unix socket  Intelligence"
+  895  git push
+  896  exit
+  897  sudo -u postgres psql -d finance_db
+  898  exit
+  899  cd galaxy
+  900  source venv/bin/activate
+  901  code .
+  902  python -c "
+  903  from collectors.unix_socket import UnixSocketCollector
+  904  c=UnixSocketCollector()
+  905  for x in c.collect():
+  906      if 'postgres' in x.data['socket_path'] or 'PGSQL' in x.data['socket_path']:
+  907          print(x)
+  908  "
+  909  python -c "
+  910  from collectors.process import ProcessCollector
+  911  for p in ProcessCollector().collect():
+  912      if p.data['pid']==312:
+  913          print(p)
+  914  "
+  915  python -c "
+  916  from collectors.process import ProcessCollector
+  917  from collectors.unix_socket import UnixSocketCollector
+  918  from core.relationships.unix_socket import query_unix_socket_relationships
+  919  processes = ProcessCollector().collect()
+  920  sockets = UnixSocketCollector().collect()
+  921  rels = query_unix_socket_relationships(
+  922      processes,
+  923      sockets
+  924  )
+  925  for r in rels:
+  926      if 'postgres' in str(r):
+  927          print(r)
+  928  "
+  929  python -c "
+  930  from core.orchestrator import Orchestrator
+  931  o=Orchestrator()
+  932  obs,rels=o.run_once()
+  933  for r in rels:
+  934      if r.relationship_type=='connected_through':
+  935          if 'postgres' in str(r) or 'PGSQL' in str(r):
+  936              print(r)
+  937  "
+  938  python -c "
+  939  from collectors.database.database import DatabaseManager
+  940  d=DatabaseManager()
+  941  for x in d.collect():
+  942      print(x)
+  943  "
+  944  python -c "
+  945  from collectors.database.database import DatabaseManager
+  946  for x in DatabaseManager().collect():
+  947      print(x)
+  948  "
+  949  python -c "
+  950  from core.orchestrator import Orchestrator
+  951  o=Orchestrator()
+  952  obs,rels=o.run_once()
+  953  for r in rels:
+  954      if r.relationship_type=='belongs_to':
+  955          if 'postgres' in str(r) or 'PGSQL' in str(r):
+  956              print(r)
+  957  "
+  958  python -c "
+  959  from core.orchestrator import Orchestrator
+  960  o=Orchestrator()
+  961  obs,rels=o.run_once()
+  962  for r in rels:
+  963      if r.relationship_type in (
+  964          'belongs_to',
+  965          'contains'
+  966      ):
+  967          print(r)
+  968  "
+  969  python -c "
+  970  from core.orchestrator import Orchestrator
+  971  o=Orchestrator()
+  972  obs,rels=o.run_once()
+  973  for r in rels:
+  974      if r.relationship_type in (
+  975          'belongs_to',
+  976          'contains'
+  977      ):
+  978          print(r)
+  979  "
+  980  python -c "
+  981  from core.orchestrator import Orchestrator
+  982  o=Orchestrator()
+  983  obs,rels=o.run_once()
+  984  for r in rels:
+  985      if r.relationship_type in (
+  986          'belongs_to',
+  987          'contains'
+  988      ):
+  989          print(r)
+  990  "
+  991  python -c "
+  992  from core.orchestrator import Orchestrator
+  993  o=Orchestrator()
+  994  obs,rels=o.run_once()
+  995  for r in rels:
+  996      if r.relationship_type in (
+  997          'belongs_to',
+  998          'contains'
+  999      ):
+ 1000          print(r)
+ 1001  "
+ 1002  python -c "
+ 1003  from core.orchestrator import Orchestrator
+ 1004  o=Orchestrator()
+ 1005  obs,rels=o.run_once()
+ 1006  for r in rels:
+ 1007      if r.relationship_type in (
+ 1008          'belongs_to',
+ 1009          'contains'
+ 1010      ):
+ 1011          print(r)
+ 1012  "
+ 1013  grep -n "unix_socket_database_relationships" core/orchestrator.py
+ 1014  python -c "
+ 1015  from core.orchestrator import Orchestrator
+ 1016  o=Orchestrator()
+ 1017  obs,rels=o.run_once()
+ 1018  for r in rels:
+ 1019      if r.relationship_type in (
+ 1020          'belongs_to',
+ 1021          'contains'
+ 1022      ):
+ 1023          print(r)
+ 1024  "
+ 1025  python -c "
+ 1026  from core.orchestrator import Orchestrator
+ 1027  o=Orchestrator()
+ 1028  obs,rels=o.run_once()
+ 1029  for r in rels:
+ 1030      if r.relationship_type in (
+ 1031          'belongs_to',
+ 1032          'contains'
+ 1033      ):
+ 1034          print(r)
+ 1035  "
+ 1036  python -c "
+ 1037  from collectors.database import DatabaseCollector
+ 1038  for x in DatabaseCollector().collect():
+ 1039      if x.entity_type=='database_connection':
+ 1040          print(x)
+ 1041  "
+ 1042  python -c "
+ 1043  from collectors.database import DatabaseManager
+ 1044  for x in DatabaseManager().collect():
+ 1045      if x.entity_type=='database_connection':
+ 1046          print(x)
+ 1047  "
+ 1048  tree collectors/database
+ 1049  grep -R "class .*Database" collectors/database
+ 1050  python -c "
+ 1051  from collectors.database.database import DatabaseManager
+ 1052  for x in DatabaseManager().collect():
+ 1053      if x.entity_type=='database_connection':
+ 1054          print(x)
+ 1055  "
+ 1056  python -c "
+ 1057  from collectors.database.database import DatabaseManager
+ 1058  for x in DatabaseManager().collect():
+ 1059      if x.entity_type=='database_connection':
+ 1060          print(x)
+ 1061  "
+ 1062  python -c "
+ 1063  from core.orchestrator import Orchestrator
+ 1064  o=Orchestrator()
+ 1065  obs,rels=o.run_once()
+ 1066  for r in rels:
+ 1067      if r.relationship_type=='owns_connection':
+ 1068          print(r)
+ 1069  "
+ 1070  python -c "
+ 1071  from core.orchestrator import Orchestrator
+ 1072  o=Orchestrator()
+ 1073  obs,rels=o.run_once()
+ 1074  for r in rels:
+ 1075      if r.relationship_type=='owns_connection':
+ 1076          print(r)
+ 1077  "
+ 1078  python -c "
+ 1079  from core.orchestrator import Orchestrator
+ 1080  o=Orchestrator()
+ 1081  obs,rels=o.run_once()
+ 1082  for r in rels:
+ 1083      if r.relationship_type=='connected_to':
+ 1084          print(r)
+ 1085  "
+ 1086  python -c "
+ 1087  from core.orchestrator import Orchestrator
+ 1088  o=Orchestrator()
+ 1089  obs,rels=o.run_once()
+ 1090  for r in rels:
+ 1091      if r.relationship_type=='executes':
+ 1092          print(r)
+ 1093  "
+ 1094  grep -R "relationship_type=.*executes" -n core
+ 1095  python -c "
+ 1096  from core.orchestrator import Orchestrator
+ 1097  o=Orchestrator()
+ 1098  obs,rels=o.run_once()
+ 1099  for r in rels:
+ 1100      if r.relationship_type=='executes':
+ 1101          print(r)
+ 1102  "
+ 1103  python -c "
+ 1104  from collectors.database.database import DatabaseManager
+ 1105  for x in DatabaseManager().collect():
+ 1106      if x.entity_type=='database_query':
+ 1107          print(x)
+ 1108  "
+ 1109  python -c "
+ 1110  from collectors.database.database import DatabaseManager
+ 1111  for x in DatabaseManager().collect():
+ 1112      if x.entity_type=='database_query':
+ 1113          print(x)
+ 1114  "
+ 1115  python -c "
+ 1116  from collectors.database.database import DatabaseManager
+ 1117  for x in DatabaseManager().collect():
+ 1118      if x.entity_type=='database_table':
+ 1119          print(x)
+ 1120  "
+ 1121  python -c "
+ 1122  from core.orchestrator import Orchestrator
+ 1123  o=Orchestrator()
+ 1124  obs,rels=o.run_once()
+ 1125  for r in rels:
+ 1126      if r.relationship_type=='accesses':
+ 1127          print(r)
+ 1128  "
+ 1129  python -c "
+ 1130  from collectors.database.database import DatabaseManager
+ 1131  for x in DatabaseManager().collect():
+ 1132      print(x)
+ 1133  "
+ 1134  python -c "
+ 1135  from core.orchestrator import Orchestrator
+ 1136  o=Orchestrator()
+ 1137  obs,rels=o.run_once()
+ 1138  for r in rels:
+ 1139      if r.relationship_type=='holds':
+ 1140          print(r)
+ 1141  "
+ 1142  python -c "
+ 1143  from core.orchestrator import Orchestrator
+ 1144  o=Orchestrator()
+ 1145  obs,rels=o.run_once()
+ 1146  for r in rels:
+ 1147      if r.relationship_type=='holds':
+ 1148          print(r)
+ 1149  "
+ 1150  python -c "
+ 1151  from core.orchestrator import Orchestrator
+ 1152  o=Orchestrator()
+ 1153  obs,rels=o.run_once()
+ 1154  for r in rels:
+ 1155      if r.relationship_type=='holds':
+ 1156          print(r)
+ 1157  "
+ 1158  git add .
+ 1159  git commit -m "Update  connection to db instance Database Intelligene"
+ 1160  git push
+ 1161  python -c "
+ 1162  from collectors.database.health import DatabaseHealthCollector
+ 1163  for x in DatabaseHealthCollector().collect():
+ 1164      print(x)
+ 1165  "
+ 1166  nano collectors/database/index.py
+ 1167  python -c "
+ 1168  from collectors.database.health import DatabaseIndexCollector
+ 1169  for x in DatabaseIndexCollector().collect():
+ 1170      print(x)
+ 1171  "
+ 1172  python -c "
+ 1173  from collectors.database.index import DatabaseIndexCollector
+ 1174  for x in DatabaseIndexCollector().collect():
+ 1175      print(x)
+ 1176  "
+ 1177  python -c "
+ 1178  from collectors.database.health import DatabaseIndexCollector
+ 1179  for x in DatabaseIndexCollector().collect():
+ 1180      print(x)
+ 1181  "
+ 1182  python -c "
+ 1183  from collectors.database.index import DatabaseIndexCollector
+ 1184  for x in DatabaseIndexCollector().collect():
+ 1185      print(x)
+ 1186  "
+ 1187  python -c "
+ 1188  from collectors.database.index import DatabaseIndexCollector
+ 1189  for x in DatabaseIndexCollector().collect():
+ 1190      print(x)
+ 1191  "
+ 1192  "sudo",
+ 1193  python -c "
+ 1194  from collectors.database.index import DatabaseIndexCollector
+ 1195  for x in DatabaseIndexCollector().collect():
+ 1196      print(
+ 1197          x.data['index']['schema'],
+ 1198          x.data['index']['table'],
+ 1199          x.data['index']['name']
+ 1200      )
+ 1201  "
+ 1202  sudo -u postgres psql -c "
+ 1203  SELECT *
+ 1204  FROM pg_indexes
+ 1205  LIMIT 10;
+ 1206  "
+ 1207  sudo -u postgres psql -t -A -c "
+ 1208  SELECT json_build_object(
+ 1209      'schema',
+ 1210      schemaname,
+ 1211      'table',
+ 1212      tablename,
+ 1213      'index',
+ 1214      indexname,
+ 1215      'definition',
+ 1216      indexdef
+ 1217  )
+ 1218  FROM pg_indexes;
+ 1219  "
+ 1220  python -c "
+ 1221  from collectors.database.index import DatabaseIndexCollector
+ 1222  for x in DatabaseIndexCollector().collect('finance_db'):
+ 1223      print(x)
+ 1224  "
+ 1225  python -c "
+ 1226  from collectors.database.index import DatabaseIndexCollector
+ 1227  for x in DatabaseIndexCollector().collect('finance_db'):
+ 1228      print(x)
+ 1229  "
+ 1230  python -c "
+ 1231  from collectors.database.database import DatabaseManager
+ 1232  for x in DatabaseManager().collect():
+ 1233      print(x)
+ 1234  "
+ 1235  python -c "
+ 1236  from collectors.database.index import DatabaseIndexCollector
+ 1237  for x in DatabaseIndexCollector().collect('finance_db'):
+ 1238      print(x)
+ 1239  "
+ 1240  python -c "
+ 1241  from collectors.database.database import DatabaseManager
+ 1242  for x in DatabaseManager().collect():
+ 1243      print(x)
+ 1244  "
+ 1245  python -c "
+ 1246  from core.orchestrator import Orchestrator
+ 1247  o=Orchestrator()
+ 1248  obs,rels=o.run_once()
+ 1249  for r in rels:
+ 1250      if r.relationship_type=='has_index':
+ 1251          print(r)
+ 1252  "
+ 1253  git add .
+ 1254  git commit -m "Updated  index and health Database Intelligene"
+ 1255  git push
+ 1256  history
+ 1257  exit
+ 1258  sudo -u postgres psql -d finance_db
+ 1259  cd galaxy
+ 1260  source venv/bin/activate
+ 1261  code .
+ 1262  sudo -u postgres psql -d finance_db -c "
+ 1263  SELECT
+ 1264      c.oid,
+ 1265      n.nspname AS schema_name,
+ 1266      c.relname AS table_name
+ 1267  FROM pg_class c
+ 1268  JOIN pg_namespace n
+ 1269      ON n.oid = c.relnamespace
+ 1270  WHERE c.oid = 32776;
+ 1271  "
+ 1272  sudo -u postgres psql -d finance_db -c "
+ 1273  SELECT
+ 1274      c.oid,
+ 1275      n.nspname AS schema_name,
+ 1276      c.relname AS relation_name,
+ 1277      c.relkind
+ 1278  FROM pg_class c
+ 1279  JOIN pg_namespace n
+ 1280      ON n.oid = c.relnamespace
+ 1281  WHERE c.oid = 32776;
+ 1282  "
+ 1283  sudo -u postgres psql -d finance_db -c "
+ 1284  SELECT
+ 1285      c.oid,
+ 1286      n.nspname AS schema_name,
+ 1287      c.relname AS relation_name,
+ 1288      c.relkind
+ 1289  FROM pg_class c
+ 1290  JOIN pg_namespace n
+ 1291      ON n.oid = c.relnamespace
+ 1292  WHERE c.relname = 'expenses';
+ 1293  "
+ 1294  sudo -u postgres psql -d finance_db -c "
+ 1295  SELECT
+ 1296      l.pid,
+ 1297      l.locktype,
+ 1298      l.mode,
+ 1299      l.granted,
+ 1300      l.relation,
+ 1301      n.nspname AS schema_name,
+ 1302      c.relname AS relation_name,
+ 1303      c.relkind
+ 1304  FROM pg_locks l
+ 1305  LEFT JOIN pg_class c
+ 1306      ON c.oid = l.relation
+ 1307  LEFT JOIN pg_namespace n
+ 1308      ON n.oid = c.relnamespace
+ 1309  WHERE l.relation IS NOT NULL;
+ 1310  "
+ 1311  python -c "
+ 1312  from collectors.database.lock import DatabaseLockCollector
+ 1313  for x in DatabaseLockCollector().collect():
+ 1314      print(x)
+ 1315  "
+ 1316  sudo -u postgres psql -d finance_db -c "
+ 1317  SELECT
+ 1318      l.pid,
+ 1319      l.locktype,
+ 1320      l.mode,
+ 1321      l.granted,
+ 1322      l.relation,
+ 1323      n.nspname AS schema_name,
+ 1324      c.relname AS relation_name,
+ 1325      c.relkind
+ 1326  FROM pg_locks l
+ 1327  LEFT JOIN pg_class c
+ 1328      ON c.oid = l.relation
+ 1329  LEFT JOIN pg_namespace n
+ 1330      ON n.oid = c.relnamespace;
+ 1331  "
+ 1332  python -c "
+ 1333  from collectors.database.lock import DatabaseLockCollector
+ 1334  for x in DatabaseLockCollector().collect():
+ 1335      print(x)
+ 1336  "
+ 1337  python -c "
+ 1338  from collectors.database.lock import DatabaseLockCollector
+ 1339  for x in DatabaseLockCollector().collect():
+ 1340      print(x)
+ 1341  "
+ 1342  python -c "
+ 1343  from collectors.database.lock import DatabaseLockCollector
+ 1344  for x in DatabaseLockCollector().collect():
+ 1345      print(x)
+ 1346  "
+ 1347  python -c "
+ 1348  from collectors.database.lock import DatabaseLockCollector
+ 1349  for x in DatabaseLockCollector().collect('finance_db'):
+ 1350      print(x)
+ 1351  "
+ 1352  python -c "
+ 1353  from core.orchestrator import Orchestrator
+ 1354  obs, rels = Orchestrator().run_once()
+ 1355  for x in obs:
+ 1356      if x.entity_type == 'database_lock':
+ 1357          print(x)
+ 1358  "
+ 1359  python -c "
+ 1360  from collectors.database.lock import DatabaseLockCollector
+ 1361  for x in DatabaseLockCollector().collect('finance_db'):
+ 1362      print(x.data['lock'])
+ 1363  "
+ 1364  python -c "
+ 1365  from collectors.database.lock import DatabaseLockCollector
+ 1366  for x in DatabaseLockCollector().collect('finance_db'):
+ 1367      print(x.data['lock'])
+ 1368  "
+ 1369  python -c "
+ 1370  from collectors.database.query import DatabaseQueryCollector
+ 1371  for q in DatabaseQueryCollector().collect():
+ 1372      print(q)
+ 1373  "
+ 1374  python -c "
+ 1375  from collectors.database.query import DatabaseQueryCollector
+ 1376  for q in DatabaseQueryCollector().collect():
+ 1377      print(q)
+ 1378  "
+ 1379  python -c "
+ 1380  from collectors.database.query import DatabaseQueryCollector
+ 1381  for q in DatabaseQueryCollector().collect():
+ 1382      print(q)
+ 1383  "
+ 1384  python -c "
+ 1385  from core.orchestrator import Orchestrator
+ 1386  obs, rels = Orchestrator().run_once()
+ 1387  for r in rels:
+ 1388      if r.relationship_type == 'holds':
+ 1389          print(r)
+ 1390  "
+ 1391  python -c "
+ 1392  from collectors.database.query import DatabaseQueryCollector
+ 1393  for q in DatabaseQueryCollector().collect():
+ 1394      print(q)
+ 1395  "
+ 1396  python -c "
+ 1397  from collectors.database.query import DatabaseQueryCollector
+ 1398  for q in DatabaseQueryCollector().collect():
+ 1399      print(q)
+ 1400  "
+ 1401  python -c "
+ 1402  from collectors.database.query import DatabaseQueryCollector
+ 1403  for q in DatabaseQueryCollector().collect():
+ 1404      print(q)
+ 1405  "
+ 1406  nano collectors/database/column.py
+ 1407  python -c "
+ 1408  from collectors.database.column import DatabaseColumnCollector
+ 1409  for c in DatabaseColumnCollector().collect('finance_db'):
+ 1410      print(c)
+ 1411  "
+ 1412  python -c "
+ 1413  from collectors.database.column import DatabaseColumnCollector
+ 1414  for c in DatabaseColumnCollector().collect('finance_db'):
+ 1415      print(c)
+ 1416  "
+ 1417  nano core/relationships/database_table_column.py
+ 1418  python -c "
+ 1419  from collectors.database.table import DatabaseTableCollector
+ 1420  from collectors.database.column import DatabaseColumnCollector
+ 1421  from core.relationships.database_table_column import table_column_relationships
+ 1422  tables = DatabaseTableCollector().collect('finance_db')
+ 1423  columns = DatabaseColumnCollector().collect('finance_db')
+ 1424  rels = table_column_relationships(
+ 1425      tables,
+ 1426      columns
+ 1427  )
+ 1428  for r in rels:
+ 1429      print(r)
+ 1430  "
+ 1431  python -c "
+ 1432  from collectors.database.table import DatabaseTableCollector
+ 1433  from collectors.database.column import DatabaseColumnCollector
+ 1434  from core.relationships.database_table_column import table_column_relationships
+ 1435  tables = DatabaseTableCollector().collect()
+ 1436  columns = DatabaseColumnCollector().collect('finance_db')
+ 1437  rels = table_column_relationships(
+ 1438      tables,
+ 1439      columns
+ 1440  )
+ 1441  for r in rels:
+ 1442      print(r)
+ 1443  "
+ 1444  python -c "
+ 1445  from collectors.database.table import DatabaseTableCollector
+ 1446  from collectors.database.column import DatabaseColumnCollector
+ 1447  from core.relationships.database_table_column import table_column_relationships
+ 1448  tables = DatabaseTableCollector().collect('finance_db')
+ 1449  columns = DatabaseColumnCollector().collect('finance_db')
+ 1450  rels = table_column_relationships(
+ 1451      tables,
+ 1452      columns
+ 1453  )
+ 1454  for r in rels:
+ 1455      print(r)
+ 1456  "python -c "
+ 1457  from collectors.database.table import DatabaseTableCollector
+ 1458  from collectors.database.column import DatabaseColumnCollector
+ 1459  from core.relationships.database_table_column import table_column_relationships
+ 1460  tables = DatabaseTableCollector().collect()
+ 1461  columns = DatabaseColumnCollector().collect()
+ 1462  rels = table_column_relationships(
+ 1463      tables,
+ 1464      columns
+ 1465  )
+ 1466  for r in rels:
+ 1467      print(r)
+ 1468  "
+ 1469  python -c "
+ 1470  from collectors.database.table import DatabaseTableCollector
+ 1471  from collectors.database.column import DatabaseColumnCollector
+ 1472  from core.relationships.database_table_column import table_column_relationships
+ 1473  tables = DatabaseTableCollector().collect()
+ 1474  columns = DatabaseColumnCollector().collect()
+ 1475  rels = table_column_relationships(
+ 1476      tables,
+ 1477      columns
+ 1478  )
+ 1479  for r in rels:
+ 1480      print(r)
+ 1481  "
+ 1482  python -c "
+ 1483  from collectors.database.column import DatabaseColumnCollector
+ 1484  for c in DatabaseColumnCollector().collect():
+ 1485      print(
+ 1486          c.data['database']['name'],
+ 1487          c.data['column']['table'],
+ 1488          c.data['column']['name']
+ 1489      )
+ 1490  "
+ 1491  nano collectors/database/foreign_key.py
+ 1492  python -c "
+ 1493  from collectors.database.foreign_key import DatabaseForeignKeyCollector
+ 1494  for fk in DatabaseForeignKeyCollector().collect():
+ 1495      print(fk.data)
+ 1496  "
+ 1497  nano core/relationships/database_foreign_key.py
+ 1498  python -c "
+ 1499  from collectors.database.table import DatabaseTableCollector
+ 1500  from collectors.database.foreign_key import DatabaseForeignKeyCollector
+ 1501  from core.relationships.database_foreign_key import foreign_key_relationships
+ 1502  tables = DatabaseTableCollector().collect()
+ 1503  fks = DatabaseForeignKeyCollector().collect()
+ 1504  rels = foreign_key_relationships(
+ 1505      fks,
+ 1506      tables
+ 1507  )
+ 1508  for r in rels:
+ 1509      print(r)
+ 1510  "
+ 1511  nano core/relationships/database_query_table.py
+ 1512  python -c "
+ 1513  from collectors.database.query import DatabaseQueryCollector
+ 1514  from collectors.database.table import DatabaseTableCollector
+ 1515  from core.relationships.database_query_table import query_table_relationships
+ 1516  queries = DatabaseQueryCollector().collect()
+ 1517  tables = DatabaseTableCollector().collect()
+ 1518  rels = query_table_relationships(
+ 1519      queries,
+ 1520      tables
+ 1521  )
+ 1522  for r in rels:
+ 1523      print(r)
+ 1524  "
+ 1525  python -c "
+ 1526  from collectors.database.query import DatabaseQueryCollector
+ 1527  from collectors.database.table import DatabaseTableCollector
+ 1528  from core.relationships.database_query_table import query_table_relationships
+ 1529  queries = DatabaseQueryCollector().collect()
+ 1530  tables = DatabaseTableCollector().collect()
+ 1531  rels = query_table_relationships(
+ 1532      queries,
+ 1533      tables
+ 1534  )
+ 1535  for r in rels:
+ 1536      print(r)
+ 1537  "
+ 1538  python -c "
+ 1539  from collectors.database.query import DatabaseQueryCollector
+ 1540  from collectors.database.table import DatabaseTableCollector
+ 1541  from core.relationships.database_query_table import query_table_relationships
+ 1542  queries = DatabaseQueryCollector().collect()
+ 1543  tables = DatabaseTableCollector().collect()
+ 1544  rels = query_table_relationships(
+ 1545      queries,
+ 1546      tables
+ 1547  )
+ 1548  for r in rels:
+ 1549      print(r)
+ 1550  "
+ 1551  python -c "
+ 1552  from collectors.database.query import DatabaseQueryCollector
+ 1553  from collectors.database.table import DatabaseTableCollector
+ 1554  from core.relationships.database_query_table import query_table_relationships
+ 1555  queries = DatabaseQueryCollector().collect()
+ 1556  tables = DatabaseTableCollector().collect()
+ 1557  rels = query_table_relationships(
+ 1558      queries,
+ 1559      tables
+ 1560  )
+ 1561  for r in rels:
+ 1562      print(r)
+ 1563  "
+ 1564  python -c "
+ 1565  from collectors.database.query import DatabaseQueryCollector
+ 1566  from collectors.database.table import DatabaseTableCollector
+ 1567  from core.relationships.database_query_table import query_table_relationships
+ 1568  queries = DatabaseQueryCollector().collect()
+ 1569  tables = DatabaseTableCollector().collect()
+ 1570  rels = query_table_relationships(
+ 1571      queries,
+ 1572      tables
+ 1573  )
+ 1574  for r in rels:
+ 1575      print(r)
+ 1576  "
+ 1577  python main.py
+ 1578  python -c "
+ 1579  from core.orchestrator import Orchestrator
+ 1580  obs, rels = Orchestrator().run_once()
+ 1581  for r in rels:
+ 1582      if r.relationship_type == 'reads':
+ 1583          print(r)
+ 1584  "
+ 1585  python main.py
+ 1586  python -c "
+ 1587  from core.orchestrator import Orchestrator
+ 1588  obs, rels = Orchestrator().run_once()
+ 1589  for r in rels:
+ 1590      if r.relationship_type in ['has_column','references']:
+ 1591          print(r)
+ 1592  "
+ 1593  python -c "
+ 1594  from core.storage.sqlite_store import SQLiteStore
+ 1595  from core.graph.machine_graph import MachineGraph
+ 1596  store = SQLiteStore()
+ 1597  graph = MachineGraph(store)
+ 1598  results = graph.find_entities(
+ 1599      entity_type='database_table',
+ 1600      keyword='expenses'
+ 1601  )
+ 1602  for r in results:
+ 1603      print(
+ 1604          r.entity_type,
+ 1605          r.entity_id
+ 1606      )
+ 1607  "
+ 1608  python -c "
+ 1609  from core.storage.sqlite_store import SQLiteStore
+ 1610  from core.graph.machine_graph import MachineGraph
+ 1611  store = SQLiteStore()
+ 1612  graph = MachineGraph(store)
+ 1613  impact = graph.impact_analysis(
+ 1614      'postgresql:finance_db:public:expenses'
+ 1615  )
+ 1616  print('AFFECTED BY')
+ 1617  for item in impact['affected_by']:
+ 1618      print(item)
+ 1619  print('AFFECTS')
+ 1620  for item in impact['affects']:
+ 1621      print(item)
+ 1622  "
+ 1623  python -c "
+ 1624  from core.storage.sqlite_store import SQLiteStore
+ 1625  from core.graph.machine_graph import MachineGraph
+ 1626  graph = MachineGraph(
+ 1627      SQLiteStore()
+ 1628  )
+ 1629  path = graph.shortest_path(
+ 1630      'postgresql:query:finance_db:13037',
+ 1631      'postgresql:finance_db:public:expenses'
+ 1632  )
+ 1633  for node in path:
+ 1634      print(node)
+ 1635  "
+ 1636  python -c "
+ 1637  from core.storage.sqlite_store import SQLiteStore
+ 1638  from core.graph.machine_graph import MachineGraph
+ 1639  graph = MachineGraph(
+ 1640      SQLiteStore()
+ 1641  )
+ 1642  path = graph.shortest_path(
+ 1643      'postgresql:query:finance_db:13037',
+ 1644      'postgresql:finance_db:public:expenses'
+ 1645  )
+ 1646  for node in path:
+ 1647      print(node)
+ 1648  "
+ 1649  mv galaxy.db galaxy_backup.db
+ 1650  python main.py
+ 1651  exit
+ 1652  exit
+ 1653  cd galaxy
+ 1654  source venv/bin/activate
+ 1655  code .
+ 1656  python main.py
+ 1657  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+relationships = graph.get_current_relationships()
+
+print('Total relationships:', len(relationships))
+
+for r in relationships:
+    print(r)
+"
+ 1658  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+relationships = graph.get_current_relationships()
+
+for r in relationships:
+    if r[2] == '<relationship_type>':
+        print(r)
+"
+ 1659  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'parent_of':
+        print(r)
+"
+ 1660  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'runs':
+        print(r)
+"
+ 1661  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'owns':
+        print(r)
+"
+ 1662  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'manages':
+        print(r)
+"
+ 1663  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'listens_on':
+        print(r)
+"
+ 1664  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'has_health':
+        print(r)
+"
+ 1665* python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'holds':
+   
+ 1666  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'executed_by':
+        print(r)
+"
+ 1667  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'executed_by':
+        print(r)
+"
+ 1668  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'holds':
+        print(r)
+"
+ 1669  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] in ('reads', 'accesses'):
+        print(r)
+"
+ 1670  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'references':
+        print(r)
+"
+ 1671  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'has_column':
+        print(r)
+"
+ 1672  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'has_index':
+        print(r)
+"
+ 1673  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'holds':
+        print(r)
+"
+ 1674  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'reads':
+        print(r)
+"
+ 1675  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'holds':
+        print(r)
+"
+ 1676  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'has_health':
+        print(r)
+"
+ 1677  python -c "
+from core.storage.sqlite_store import SQLiteStore
+
+store = SQLiteStore()
+
+for o in store.query_observations('database_query'):
+    print(o)
+"
+ 1678  python -c "
+from core.storage.sqlite_store import SQLiteStore
+
+store = SQLiteStore()
+
+for o in store.all():
+    if o.entity_type == 'database_query':
+        print(o)
+"
+ 1679  python -c "
+from core.storage.sqlite_store import SQLiteStore
+
+store = SQLiteStore()
+
+for o in store.all():
+    if o.entity_type == 'process' and str(o.data.get('pid')) == '13037':
+        print(o)
+"
+ 1680  grep -R "def query_process_relationships" -n core
+ 1681  grep -R "query_process_relationships" -n .
+ 1682  python main.py
+ 1683  python -c "
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+graph = MachineGraph(SQLiteStore())
+
+for r in graph.get_current_relationships():
+    if r[2] == 'executed_by':
+        print(r)
+"
+ 1684  mkdir -p core/correlation
+ 1685  touch core/correlation/correlation_engine.py
+ 1686  python main.py
+ 1687  history > commands_history.txt

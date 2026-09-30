@@ -34,15 +34,44 @@ class DatabaseQueryCollector:
                 "-A",
                 "-c",
                 """
-                SELECT json_build_object(
-                    'pid', pid,
-                    'user', usename,
-                    'database', datname,
-                    'state', state,
-                    'query', query
-                )
-                FROM pg_stat_activity;
-                """
+                    SELECT json_build_object(
+                        'pid', pid,
+                        'user', usename,
+                        'database', datname,
+                        'state', state,
+                        'query', query,
+                         'query_start',
+                            query_start,
+
+                            'backend_start',
+                            backend_start,
+
+                            'wait_event_type',
+                            wait_event_type,
+
+                            'wait_event',
+                            wait_event
+                    )
+                    FROM pg_stat_activity
+
+                    WHERE query IS NOT NULL
+
+                    AND state IS NOT NULL
+
+                    AND pid <> pg_backend_pid()
+
+                    AND query NOT LIKE '%pg_stat_activity%';
+
+                 """
+                # SELECT json_build_object(
+                #                     'pid', pid,
+                #                     'user', usename,
+                #                     'database', datname,
+                #                     'state', state,
+                #                     'query', query
+                #                 )
+                #                 FROM pg_stat_activity
+                #                 WHERE query IS NOT NULL;
                 # "-t",
                 # "-A",
                 # "-F",
@@ -66,6 +95,8 @@ class DatabaseQueryCollector:
 
 
         now = datetime.now(timezone.utc)
+
+        
 
 
         for line in result.stdout.splitlines():
@@ -95,6 +126,28 @@ class DatabaseQueryCollector:
 
             data = json.loads(line)
 
+            # start = datetime.fromisoformat(
+            #     data["query_start"]
+            # )
+
+
+            # duration = (
+            #     datetime.now(timezone.utc)
+            #     -
+            #     start
+            # ).total_seconds()
+
+            query_start = data.get("query_start")
+
+            duration_seconds = None
+
+            if query_start:
+                start = datetime.fromisoformat(query_start)
+
+                duration_seconds = (
+                    datetime.now(timezone.utc) - start.astimezone(timezone.utc)
+                ).total_seconds()
+
             pid = str(data["pid"])
             user = data["user"]
             database = data["database"]
@@ -106,12 +159,18 @@ class DatabaseQueryCollector:
                 Observation(
                     source="database",
                     entity_type="database_query",
-                    entity_id=f"postgresql:query:{pid}",
+                    #entity_id=f"postgresql:query:{pid}",
+                    entity_id=(
+                        f"postgresql:query:"
+                        f"{database}:"
+                        f"{pid}"
+                    ),
                     timestamp=now,
                     data={
                         "database":{
                             "engine":"postgresql",
                             "host":"localhost",
+                            "name":database
                         },
                         "query":{
                             "pid":pid,
@@ -119,6 +178,18 @@ class DatabaseQueryCollector:
                             "database":database,
                             "state":state,
                             "sql":query,
+                            "query_start":
+                                data["query_start"],
+
+                            "backend_start":
+                                data["backend_start"],
+
+                            "wait_event_type":
+                                data["wait_event_type"],
+
+                            "wait_event":
+                                data["wait_event"],
+                            "duration_seconds": duration_seconds
                         }
                     }
                 )
