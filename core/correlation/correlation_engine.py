@@ -1,66 +1,40 @@
-from core.graph.machine_graph import MachineGraph
+from core.correlation.rules import (
+    HighCPUProcessRule
+)
 
 
 class CorrelationEngine:
 
 
-    def __init__(self, store):
+    def __init__(self, graph):
 
-        self.store = store
-
-        self.graph = MachineGraph(
-            store
-        )
+        self.graph = graph
 
 
-    def analyze(self):
-
-        events = []
-
-        events.extend(
-            self.detect_high_cpu()
-        )
-
-        return events
+        self.rules = [
+            HighCPUProcessRule()
+        ]
 
 
 
+    def analyze(
+        self,
+        observations
+    ):
 
-    def detect_high_cpu(self):
-
-        events=[]
-
-
-        processes = (
-            self.store.latest_process_observations()
-        )
+        findings = []
 
 
-        for process in processes:
+        for rule in self.rules:
 
-            cpu = process.data.get(
-                "cpu_percent",
-                0
+            results = rule.evaluate(
+                observations,
+                self.graph
+            )
+
+            findings.extend(
+                results
             )
 
 
-            if cpu > 80:
-
-
-                events.append({
-
-                    "type":
-                    "high_cpu_process",
-
-
-                    "entity":
-                    process.entity_id,
-
-
-                    "evidence":
-                    process.data
-
-                })
-
-
-        return events
+        return findings

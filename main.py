@@ -1,7 +1,16 @@
 from core.orchestrator import Orchestrator
-from core.storage.sqlite_store import SQLiteStore
+#from core.storage.sqlite_store import SQLiteStore
 from core.graph.machine_graph_display import MachineGraphDisplay
-from core.correlation.correlation_engine import CorrelationEngine
+from core.graph.machine_graph import MachineGraph
+from core.correlation.correlation_engine import (
+    CorrelationEngine
+)
+
+from core.storage.finding_store import FindingStore
+
+
+
+
 
 import time
 
@@ -12,9 +21,22 @@ COLLECTION_INTERVAL_SECONDS = 10
 def main():
 
     orchestrator = Orchestrator()
-    store = SQLiteStore()
-    correlation_engine = CorrelationEngine(store)
+    #store = SQLiteStore()
+
+    #graph = MachineGraph(store)
+
+    graph = MachineGraph(
+    orchestrator.store
+    )
+
+    correlation_engine = CorrelationEngine(
+        graph
+    )
+
     display = MachineGraphDisplay()
+
+    finding_store = FindingStore()
+    
 
     print("GALAXY")
     print("======")
@@ -39,6 +61,28 @@ def main():
 
 
             # ----------------------------------------
+            # Correlation Analysis
+            # ----------------------------------------
+
+            findings = correlation_engine.analyze(
+                observations
+            )
+
+
+            for finding in findings:
+
+                print()
+                print("====== GALAXY FINDING ======")
+                               
+
+                finding_store.save(
+                        finding
+                    )
+
+                print(finding)
+
+
+            # ----------------------------------------
             # Collection summary
             # ----------------------------------------
 
@@ -48,31 +92,12 @@ def main():
                 f"derived {len(relationships)} relationships"
             )
 
-            # ----------------------------------------
-            # Corelation 
-            # ----------------------------------------
-            
-            correlation_events = correlation_engine.analyze()
-
-            if correlation_events:
-
-                print()
-                print("CORRELATION EVENTS")
-                print("------------------")
-
-                for event in correlation_events:
-
-                    print(
-                        event
-                    )
-
-                print()
 
             # ----------------------------------------
             # Display machine graph
             # ----------------------------------------
 
-            display.print_relationship_graph(store)
+            #display.print_relationship_graph(store)
 
             # ----------------------------------------
             # Wait before next collection

@@ -1,0 +1,594 @@
+Good — this error tells us exactly what is happening. We **should not change `get_neighbors()` yet**.
+
+Your `relationships` variable from:
+
+```python
+observations, relationships = o.run_once()
+```
+
+contains **`Relationship` dataclass objects**:
+
+```python
+Relationship(
+    source_entity_type='host',
+    source_entity_id='localhost',
+    relationship_type='runs',
+    target_entity_type='process',
+    target_entity_id='pid:1@...',
+    timestamp=...
+)
+```
+
+But your `get_neighbors()` currently expects **SQLite rows/tuples**, because it does:
+
+```python
+source_id = relationship[1]
+current_relationship = relationship[2]
+target_id = relationship[4]
+```
+
+A `Relationship` object cannot be accessed like:
+
+```python
+relationship[1]
+```
+
+Hence:
+
+```text
+TypeError: 'Relationship' object is not subscriptable
+```
+
+### The important distinction
+
+You currently have two relationship formats in GALAXY:
+
+**From `run_once()`:**
+
+```text
+Relationship object
+    .source_entity_id
+    .relationship_type
+    .target_entity_id
+```
+
+**From SQLite:**
+
+```text
+tuple
+    [0] source_entity_type
+    [1] source_entity_id
+    [2] relationship_type
+    [3] target_entity_type
+    [4] target_entity_id
+    [5] timestamp
+```
+
+Your `get_neighbors()` was written for the second format.
+
+---
+
+### Don't modify anything yet
+
+Let's confirm that `get_neighbors()` works with the **store's relationship format**, because that is already how your `MachineGraph` was designed.
+
+Run this:
+
+```bash
+python -c "
+from core.orchestrator import Orchestrator
+from core.graph.machine_graph import MachineGraph
+
+o = Orchestrator()
+
+o.run_once()
+
+graph = MachineGraph(o.store)
+
+neighbors = graph.get_current_neighbors(
+    'localhost'
+)
+
+runs = [
+    n for n in neighbors
+    if n['relationship'] == 'runs'
+]
+
+print('HOST -> PROCESS:', len(runs))
+
+for neighbor in runs[:5]:
+    print(neighbor)
+"
+```
+
+Notice the difference:
+
+```python
+graph.get_current_neighbors('localhost')
+```
+
+instead of:
+
+```python
+graph.get_neighbors('localhost', relationships)
+```
+
+`get_current_neighbors()` internally does:
+
+```python
+relationships = self.store.current_relationships()
+```
+
+Those are SQLite tuples, which is exactly the format your current `get_neighbors()` expects.
+
+If this gives us the process neighbors, then we have confirmed that **MachineGraph itself is working correctly** and we can decide how `HighCPUProcessRule` should obtain its graph data without unnecessarily changing the graph implementation.
+
+
+
+Yes. Now we can see the issue clearly in your `main.py`.
+
+You currently create **two different `SQLiteStore` objects**:
+
+```python
+orchestrator = Orchestrator()
+store = SQLiteStore()
+```
+
+Remember, `Orchestrator()` already has its own store internally:
+
+```text
+Orchestrator
+    │
+    └── orchestrator.store
+```
+
+Then `main.py` creates another:
+
+```text
+SQLiteStore()
+    │
+    └── store
+```
+
+So your graph is using:
+
+```python
+graph = MachineGraph(store)
+```
+
+while `orchestrator.run_once()` is saving observations and relationships through:
+
+```python
+orchestrator.store
+```
+
+That means the correlation rule can potentially query a **different database connection/state** from the one that just collected the data.
+
+## The small fix
+
+We don't need a new `SQLiteStore()` in `main.py`.
+
+Change this:
+
+```python
+orchestrator = Orchestrator()
+store = SQLiteStore()
+
+graph = MachineGraph(store)
+```
+
+to:
+
+```python
+orchestrator = Orchestrator()
+
+graph = MachineGraph(
+    orchestrator.store
+)
+```
+
+That's the only change for now.
+
+### Then
+
+Because `display` is currently commented out:
+
+```python
+#display.print_relationship_graph(store)
+```
+
+we don't need `store` anywhere else in `main.py`.
+
+So you can also remove:
+
+```python
+from core.storage.sqlite_store import SQLiteStore
+```
+
+The top becomes:
+
+```python
+from core.orchestrator import Orchestrator
+from core.graph.machine_graph_display import MachineGraphDisplay
+from core.graph.machine_graph import MachineGraph
+from core.correlation.correlation_engine import (
+    CorrelationEngine
+)
+
+import time
+```
+
+And the beginning of `main()` becomes:
+
+```python
+def main():
+
+    orchestrator = Orchestrator()
+
+    graph = MachineGraph(
+        orchestrator.store
+    )
+
+    correlation_engine = CorrelationEngine(
+        graph
+    )
+
+    display = MachineGraphDisplay()
+```
+
+### Architecture after this change
+
+```text
+                 ┌────────────────────┐
+                 │    Orchestrator    │
+                 │                    │
+                 │  orchestrator.store│
+                 └─────────┬──────────┘
+                           │
+                    save observations
+                    save relationships
+                           │
+                           ▼
+                 ┌────────────────────┐
+                 │    SQLiteStore     │
+                 └─────────┬──────────┘
+                           │
+                           │ query
+                           ▼
+                 ┌────────────────────┐
+                 │    MachineGraph    │
+                 └─────────┬──────────┘
+                           │
+                           ▼
+                 ┌────────────────────┐
+                 │ CorrelationEngine  │
+                 └────────────────────┘
+```
+
+This gives us one consistent data path:
+
+**Collect → Store → Graph → Correlation**
+
+After making only this change, run:
+
+```bash
+python main.py
+```
+
+Let it run for **one or two collection cycles**, then stop it with `Ctrl+C`.
+
+The next thing we should inspect is whether the normal `main.py` execution now correctly sees the current graph relationships and produces findings only when the real observations satisfy the thresholds.
+
+
+
+Your `Finding` model is fine for the current stage. It is enough for **Milestone 14 first correlation rules**.
+
+Right now your flow is:
+
+```
+Collectors
+    |
+    ↓
+Observations
+    |
+    ↓
+Relationships
+    |
+    ↓
+MachineGraph
+    |
+    ↓
+CorrelationEngine
+    |
+    ↓
+Rules
+    |
+    ↓
+Finding
+```
+
+Your `HighCPUProcessRule` is now correctly using the graph:
+
+```
+HOST
+ |
+ | runs
+ ↓
+PROCESS
+ |
+ | cpu_percent
+ ↓
+Finding
+```
+
+The next step is **not to add more rules yet**. First improve the finding lifecycle.
+
+---
+
+## Step 1: Add finding ID
+
+Currently:
+
+```python
+@dataclass
+class Finding:
+```
+
+Every time the loop runs, Galaxy creates a new finding.
+
+Example:
+
+```
+14:20 python CPU high
+14:21 python CPU high
+14:22 python CPU high
+```
+
+These are actually the same incident.
+
+Add an ID.
+
+Change:
+
+```python
+from dataclasses import dataclass
+from datetime import datetime
+import uuid
+
+
+@dataclass
+class Finding:
+
+    id: str
+
+    rule_name: str
+
+    severity: str
+
+    title: str
+
+    description: str
+
+    evidence: dict
+
+    timestamp: datetime
+```
+
+---
+
+Then in your rule:
+
+```python
+Finding(
+
+    id=str(uuid.uuid4()),
+
+    rule_name="HighCPUProcessRule",
+
+    severity="warning",
+
+    title="High CPU process detected",
+
+    ...
+)
+```
+
+Now every finding has identity.
+
+---
+
+## Step 2: Add finding storage
+
+Create:
+
+```
+core/storage/finding_store.py
+```
+
+Example:
+
+```python
+class FindingStore:
+
+
+    def __init__(self):
+
+        self.findings = []
+
+
+    def save(self, finding):
+
+        self.findings.append(
+            finding
+        )
+
+
+    def all(self):
+
+        return self.findings
+```
+
+---
+
+## Step 3: Connect it in main.py
+
+Currently:
+
+```python
+correlation_engine = CorrelationEngine(
+    graph
+)
+```
+
+Add:
+
+```python
+from core.storage.finding_store import FindingStore
+
+
+finding_store = FindingStore()
+```
+
+Then:
+
+```python
+for finding in findings:
+
+    finding_store.save(
+        finding
+    )
+
+    print(finding)
+```
+
+Now Galaxy remembers findings.
+
+---
+
+## Step 4: Improve Finding evidence
+
+Currently:
+
+```python
+evidence={
+    "host_cpu": cpu,
+    "process_id": process.entity_id,
+    "process_cpu": process_cpu,
+}
+```
+
+Good start.
+
+But Galaxy intelligence needs graph context.
+
+Change to:
+
+```python
+evidence={
+
+    "host": host.entity_id,
+
+    "host_cpu": cpu,
+
+    "process": {
+        "id": process.entity_id,
+        "name": process.data.get("name"),
+        "cpu": process_cpu
+    },
+
+}
+```
+
+Output becomes:
+
+```
+GALAXY FINDING
+
+Rule:
+HighCPUProcessRule
+
+Severity:
+warning
+
+Description:
+Process python is consuming 95% CPU
+
+
+Evidence:
+
+{
+ host: localhost,
+
+ host_cpu: 95,
+
+ process:
+ {
+   id: pid:32141,
+   name: python,
+   cpu:95
+ }
+}
+```
+
+Much closer to an intelligence system.
+
+---
+
+## Step 5: Next correlation rule
+
+After this, build:
+
+```
+HighCPUProcessDatabaseRule
+```
+
+Flow:
+
+```
+HOST
+ |
+ | runs
+ ↓
+PROCESS
+ |
+ | connects_to
+ ↓
+DATABASE_CONNECTION
+ |
+ | belongs_to
+ ↓
+DATABASE
+```
+
+Finding:
+
+```
+Database impact detected
+
+Host CPU high
+
+Process:
+    python
+
+Database:
+    PostgreSQL
+
+Active connection:
+    12
+
+Impact:
+    application may be slow
+```
+
+This uses your existing database relationships.
+
+---
+
+So the next concrete task I suggest:
+
+1. Add `Finding.id`
+2. Add `FindingStore`
+3. Store findings between cycles
+4. Then create `HighCPUProcessDatabaseRule`
+
+Your Galaxy architecture is now moving from **monitoring → reasoning**. The graph is becoming the source of context, not just a visualization.

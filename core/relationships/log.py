@@ -5,6 +5,7 @@ def log_relationships(
     log_observation,
     identity_map,
     service_map,
+    application_map,
 ):
 
     relationships = []
@@ -33,6 +34,32 @@ def log_relationships(
                     timestamp=log_observation.timestamp,
                 )
             )
+
+
+    
+    # -------------------------
+    # Application → Log
+    # -------------------------
+
+        if process_entity_id is not None:
+
+            application_entity_id = application_map.get(
+                process_entity_id
+            )
+
+            if application_entity_id is not None:
+
+                relationships.append(
+                    Relationship(
+                        source_entity_type="application",
+                        source_entity_id=application_entity_id,
+                        relationship_type="generates",
+                        target_entity_type="log",
+                        target_entity_id=log_observation.entity_id,
+                        timestamp=log_observation.timestamp,
+                    )
+                )
+
 
     # -------------------------
     # Log → Service

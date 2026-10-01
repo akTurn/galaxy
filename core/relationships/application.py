@@ -173,7 +173,8 @@ def application_relationships(
             )
         )
 
-    return applications, relationships
+   # return applications, relationships
+    return applications, relationships, process_to_application
 
 
 

@@ -168,7 +168,15 @@ class Orchestrator:
                 ]
         
 
-        applications, application_relationships_list = (
+        # applications, application_relationships_list = (
+        #     application_relationships(
+        #         process_observations,
+        #         service_observations
+        #     )
+        # )
+        
+
+        applications, application_relationships_list, process_to_application = (
             application_relationships(
                 process_observations,
                 service_observations
@@ -195,7 +203,7 @@ class Orchestrator:
                  service_observations,
              )
  
-        relationships.extend(
+        all_relationships.extend(
                  host_relationships_list
              )       
 
@@ -254,10 +262,17 @@ class Orchestrator:
 
         for observation in log_observations:
 
+            # relationships = log_relationships(
+            #     observation,
+            #     identity_map,
+            #     service_map
+            # )
+
             relationships = log_relationships(
                 observation,
                 identity_map,
-                service_map
+                service_map,
+                process_to_application
             )
 
             all_relationships.extend(

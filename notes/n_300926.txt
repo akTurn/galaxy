@@ -877,6 +877,278 @@ Then you don't need name matching.
 But for your current Galaxy stage, these relationships are a reasonable first implementation.
 
 
+This is an **architectural warning about how you are connecting a Service to a Database**.
+
+Your current code says:
+
+```python
+if engine in service_name:
+```
+
+In simple terms:
+
+> "If the database engine name appears inside the service name, assume that this service provides that database."
+
+### Example
+
+Suppose you have:
+
+```text
+Service:
+postgresql.service
+```
+
+and:
+
+```text
+Database:
+engine = "postgresql"
+```
+
+Then:
+
+```python
+service_name = "postgresql"
+engine = "postgresql"
+
+if engine in service_name:
+```
+
+becomes:
+
+```python
+if "postgresql" in "postgresql":
+```
+
+which is `True`.
+
+So GALAXY creates:
+
+```text
+service:postgresql
+        │
+        │ provides
+        ▼
+database:postgresql:...
+```
+
+---
+
+## Why is this called a heuristic?
+
+A **heuristic** is basically an educated guess based on a pattern.
+
+You're saying:
+
+> "These names look related, so I'll assume they are related."
+
+But names don't necessarily prove a relationship.
+
+For example:
+
+```text
+Service: postgres-backup
+Database: postgresql
+```
+
+The service name contains `postgres`, but that doesn't necessarily mean the service **provides** that database.
+
+Or:
+
+```text
+Service: my-postgres-monitor
+Database: postgresql
+```
+
+Again, the names match, but the service might only **monitor** PostgreSQL.
+
+So this:
+
+```python
+if engine in service_name:
+```
+
+is convenient, but it isn't strong evidence.
+
+---
+
+# The stronger approach
+
+The comment is suggesting that eventually GALAXY should use **actual connections** rather than names.
+
+You already have database connection observations.
+
+Think about this:
+
+```text
+PROCESS
+   │
+   │ owns_connection
+   ▼
+DATABASE_CONNECTION
+   │
+   │ belongs_to
+   ▼
+DATABASE
+```
+
+For example:
+
+```text
+Process
+pid:8272
+   │
+   │ owns_connection
+   ▼
+Connection
+postgresql:8272:finance_db
+   │
+   │ belongs_to
+   ▼
+Database
+postgresql:finance_db
+```
+
+Now GALAXY doesn't have to guess from names.
+
+It can say:
+
+> Process 8272 actually has a connection to `finance_db`.
+
+That's much stronger evidence.
+
+---
+
+## But there's an important distinction
+
+Your current function is:
+
+```python
+database_service_relationships(
+    service_observations,
+    database_observations
+)
+```
+
+It is trying to establish:
+
+```text
+SERVICE
+   │
+   │ provides
+   ▼
+DATABASE
+```
+
+The proposed connection chain is:
+
+```text
+PROCESS
+   │
+   ▼
+DATABASE_CONNECTION
+   │
+   ▼
+DATABASE
+```
+
+Those are **different relationships**.
+
+So the architectural note is **not saying your current function is completely wrong**.
+
+It is saying:
+
+> The current `Service → Database` relationship is based on name matching, while the database connection relationships are based on observed runtime connections.
+
+---
+
+# Why this matters for your GALAXY project
+
+Eventually you want GALAXY to understand something like:
+
+```text
+Host
+ │
+ └── hosts → Process
+              │
+              └── owns_connection → Database Connection
+                                      │
+                                      └── belongs_to → Database
+```
+
+Then you can reason:
+
+```text
+Host
+  ↓
+Process
+  ↓
+Database Connection
+  ↓
+Database
+```
+
+And later:
+
+```text
+Application
+  ↓
+Process
+  ↓
+Database Connection
+  ↓
+Database
+```
+
+This becomes very useful for your **Correlation Engine**.
+
+For example:
+
+```text
+Host CPU = 95%
+       ↓
+Process CPU = 88%
+       ↓
+Application
+       ↓
+Database connection count increased
+       ↓
+Database query duration increased
+       ↓
+Slow-query log
+```
+
+That is much stronger than:
+
+```text
+"process name contains postgres"
+        ↓
+"therefore it must be PostgreSQL"
+```
+
+---
+
+## So, should you change this function now?
+
+**No, not necessarily.**
+
+Your current function can remain as a heuristic relationship builder for now.
+
+The important thing is to understand the distinction:
+
+| Approach                    | Meaning                                              |
+| --------------------------- | ---------------------------------------------------- |
+| `if engine in service_name` | Guess relationship from names                        |
+| Process → DB connection     | Relationship based on observed runtime connection    |
+| DB connection → Database    | Direct identification of database                    |
+| Application → Process       | Existing graph relationship                          |
+| Application → Database      | Can then be derived from the process/connection path |
+
+So the comment is essentially saying:
+
+> **"This works for now, but don't make name matching the foundation of GALAXY's database intelligence. We already have stronger runtime connection evidence that can eventually replace or supplement it."**
+
+For your current milestone, I would **leave this function alone** unless you're specifically working on improving the database relationship architecture.
 
 
 
