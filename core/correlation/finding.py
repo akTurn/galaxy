@@ -17,4 +17,10 @@ class Finding:
 
     evidence: dict
 
-    timestamp: datetime
+    status: str
+
+    first_seen: datetime
+
+    last_seen: datetime
+
+    occurrences: int

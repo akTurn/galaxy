@@ -94,10 +94,67 @@ class HighCPUProcessRule:
 
 
 
+                # findings.append(
+                #     Finding(
+
+                #         id=str(uuid.uuid4()),
+
+                #         rule_name=
+                #         "HighCPUProcessRule",
+
+                #         severity=
+                #         "warning",
+
+                #         title=
+                #         "High CPU process detected",
+
+                #         description=
+                #         (
+                #           f"Process "
+                #           f"{process.data.get('name')} "
+                #           f"is consuming "
+                #           f"{process_cpu}% CPU"
+                #         ),
+
+                #         # evidence={
+                #         #     "host_cpu": cpu,
+                #         #     "process_id":
+                #         #         process.entity_id,
+                #         #     "process_cpu":
+                #         #         process_cpu,
+                #         # },
+                #         evidence={
+
+                #             "host": host.entity_id,
+
+                #             "host_cpu": cpu,
+
+                #             "process": {
+                #                 "id": process.entity_id,
+                #                 "name": process.data.get("name"),
+                #                 "cpu": process_cpu
+                #             },
+
+                #         },
+
+                #         timestamp=
+                #         datetime.now(
+                #             timezone.utc
+                #         )
+                #     )
+                # )
+                now = datetime.now(
+                    timezone.utc
+                )
+
+
                 findings.append(
                     Finding(
 
-                        id=str(uuid.uuid4()),
+                        id=(
+                            "HighCPUProcessRule:"
+                            f"{process.entity_id}"
+                        ),
 
                         rule_name=
                         "HighCPUProcessRule",
@@ -110,37 +167,33 @@ class HighCPUProcessRule:
 
                         description=
                         (
-                          f"Process "
-                          f"{process.data.get('name')} "
-                          f"is consuming "
-                          f"{process_cpu}% CPU"
+                            f"Process "
+                            f"{process.data.get('name')} "
+                            f"is consuming "
+                            f"{process_cpu}% CPU"
                         ),
 
-                        # evidence={
-                        #     "host_cpu": cpu,
-                        #     "process_id":
-                        #         process.entity_id,
-                        #     "process_cpu":
-                        #         process_cpu,
-                        # },
                         evidence={
-
                             "host": host.entity_id,
-
                             "host_cpu": cpu,
-
                             "process": {
                                 "id": process.entity_id,
                                 "name": process.data.get("name"),
                                 "cpu": process_cpu
                             },
-
                         },
 
-                        timestamp=
-                        datetime.now(
-                            timezone.utc
-                        )
+                        status=
+                        "active",
+
+                        first_seen=
+                        now,
+
+                        last_seen=
+                        now,
+
+                        occurrences=
+                        1
                     )
                 )
 
