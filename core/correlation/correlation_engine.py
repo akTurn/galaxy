@@ -1,86 +1,52 @@
-# from core.correlation.rules import (
-#     HighCPUProcessRule
-# )
-
-
-# class CorrelationEngine:
-
-
-#     def __init__(self, graph):
-
-#         self.graph = graph
-
-
-#         self.rules = [
-#             HighCPUProcessRule()
-#         ]
-
-
-
-#     def analyze(
-#         self,
-#         observations
-#     ):
-
-#         findings = []
-
-
-#         for rule in self.rules:
-
-#             results = rule.evaluate(
-#                 observations,
-#                 self.graph
-#             )
-
-#             findings.extend(
-#                 results
-#             )
-
-
-#         return findings
-
-from core.correlation.rules import (
-    HighCPUProcessRule
-)
-
-from core.correlation.finding_store import (
-    FindingStore
-)
+from core.correlation.finding import Finding
 
 
 class CorrelationEngine:
-
-    def __init__(self, graph):
-
+    def __init__(self, store, graph, rules=None):
+        self.store = store
         self.graph = graph
+        self.rules = list(rules or [])
 
-        self.rules = [
-            HighCPUProcessRule()
-        ]
+    def register_rule(self, rule):
+        if any(
+            existing.rule_id == rule.rule_id
+            for existing in self.rules
+        ):
+            raise ValueError(
+                f"Duplicate correlation rule: {rule.rule_id}"
+            )
 
-        self.finding_store = FindingStore()
+        self.rules.append(rule)
 
-    def analyze(self, observations):
-
+    def run_once(self):
+        observations = self.store.all()
         findings = []
 
         for rule in self.rules:
-
-            results = rule.evaluate(
+            rule_findings = rule.evaluate(
                 observations,
-                self.graph
+                self.graph,
             )
 
-            for finding in results:
+            if rule_findings is None:
+                raise TypeError(
+                    f"Rule {rule.rule_id} returned None; "
+                    "expected a list of Finding objects"
+                )
 
-                stored_finding = (
-                    self.finding_store.add(
-                        finding
+            if not isinstance(rule_findings, list):
+                raise TypeError(
+                    f"Rule {rule.rule_id} must return "
+                    "a list of Finding objects"
+                )
+
+            for finding in rule_findings:
+                if not isinstance(finding, Finding):
+                    raise TypeError(
+                        f"Rule {rule.rule_id} returned "
+                        "an invalid finding"
                     )
-                )
 
-                findings.append(
-                    stored_finding
-                )
+            findings.extend(rule_findings)
 
         return findings

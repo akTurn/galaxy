@@ -1,26 +1,43 @@
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
 
 
 @dataclass
 class Finding:
-
-    id: str
-
-    rule_name: str
-
-    severity: str
-
+    finding_id: str
+    rule_id: str
     title: str
-
     description: str
+    severity: str
+    affected_entities: list[dict[str, str]] = field(
+        default_factory=list
+    )
+    evidence: list[dict[str, Any]] = field(
+        default_factory=list
+    )
+    detected_at: str = field(
+        default_factory=lambda: datetime.now(
+            timezone.utc
+        ).isoformat()
+    )
 
-    evidence: dict
+    def __post_init__(self):
+        allowed_severities = {
+            "info",
+            "low",
+            "medium",
+            "high",
+            "critical",
+        }
 
-    status: str
+        if self.severity not in allowed_severities:
+            raise ValueError(
+                f"Invalid severity: {self.severity}"
+            )
 
-    first_seen: datetime
+        if not self.finding_id:
+            raise ValueError("finding_id cannot be empty")
 
-    last_seen: datetime
-
-    occurrences: int
+        if not self.rule_id:
+            raise ValueError("rule_id cannot be empty")

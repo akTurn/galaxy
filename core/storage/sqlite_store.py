@@ -537,19 +537,29 @@ class SQLiteStore:
             ):
                 if source_id not in current_application_ids:
                     continue
-            # --------------------------------
-            # Ignore historical process relationships
-            # --------------------------------
+            # # --------------------------------
+            # # Ignore historical process relationships
+            # # --------------------------------
 
-            if relationship_type != "generated_by":
+            # if relationship_type != "generated_by":
 
-                if source_type == "process":
-                    if source_id not in current_process_ids:
-                        continue
+            #     if source_type == "process":
+            #         if source_id not in current_process_ids:
+            #             continue
 
-                if target_type == "process":
-                    if target_id not in current_process_ids:
-                        continue
+            #     if target_type == "process":
+            #         if target_id not in current_process_ids:
+            #             continue
+
+            # Filter relationships involving historical processes.
+            
+            if source_type == "process":
+                if source_id not in current_process_ids:
+                    continue
+
+            if target_type == "process":
+                if target_id not in current_process_ids:
+                    continue
 
             # --------------------------------
             # Keep latest occurrence of each edge

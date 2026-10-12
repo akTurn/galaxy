@@ -1,0 +1,1019 @@
+
+Now that we have your actual `MachineGraph` implementation and the `SQLiteStore.current_relationships()` method, we can identify the changes needed before moving on to Galaxy's `CorrelationEngine`.
+
+My recommendation: make `MachineGraph` consistently operate on current relationships by default, while preserving access to historical data when explicitly requested.
+
+## 1. The main issues in your current code
+
+Issue 1: Inconsistent relationship queries
+
+`get_outgoing()`, `get_incoming()`, and the default `get_neighbors()` call `_relationships()`, which returns `all_relationships()`.
+
+However, `traverse_current()` and `shortest_path()` use `current_relationships()`.
+
+Result: different graph methods can report different system states.
+
+Issue 2: Entity matching uses only `entity_id`
+
+Your relationship tuples contain both entity types and IDs, but the graph methods match only IDs.
+
+For example, Galaxy has processes, services, applications, databases, and other entity types. Matching both `entity_type` and `entity_id` will make graph queries more precise.
+
+Issue 3: Traversal does not preserve entity types
+
+`get_neighbors()` returns `entity_id`, relationship, and direction, but omits the neighbor's `entity_type`.
+
+Including it will make traversal output more useful for debugging and future correlation analysis.
+
+## 2. Understand your relationship tuple
+
+Your code uses relationship records in this order:
+
+| Index             | Meaning            |
+| ----------------- | ------------------ |
+| `relationship[0]` | Source entity type |
+| `relationship[1]` | Source entity ID   |
+| `relationship[2]` | Relationship type  |
+| `relationship[3]` | Target entity type |
+| `relationship[4]` | Target entity ID   |
+| `relationship[5]` | Timestamp          |
+
+For example, a relationship might represent:
+
+Process
+
+process:123
+
+managed_by
+
+Service
+
+service:postgresql.service
+
+The exact IDs above are illustrative. Your actual graph should use the identifiers stored in Galaxy.
+
+## 3. First change: make current relationships the default
+
+This is the smallest, safest initial improvement. Change the `_relationships()` method to return the current relationships:
+
+```
+def _relationships(self):    return self.store.current_relationships()
+```
+
+Previously, it returned:
+
+```
+def _relationships(self):    return self.store.all_relationships()
+```
+
+### What changes after this?
+
+| Method                                     | Before                             | After                           |
+| ------------------------------------------ | ---------------------------------- | ------------------------------- |
+| `get_outgoing()`                           | All historical relationships       | Current relationships           |
+| `get_incoming()`                           | All historical relationships       | Current relationships           |
+| `get_neighbors()` without an explicit list | All historical relationships       | Current relationships           |
+| `traverse()`                               | Traverses historical relationships | Traverses current relationships |
+| `traverse_current()`                       | Current relationships              | Current relationships           |
+| `shortest_path()`                          | Current relationships              | Current relationships           |
+
+This fixes the inconsistency without changing the storage layer or deleting historical records.
+
+One distinction matters: `find_entities()` still calls `store.all()`, so it searches stored observations rather than necessarily returning only current entities. We should decide its intended behavior separately.
+
+## 4. Second change: preserve entity types in neighbor queries
+
+Your current implementation checks:
+
+```
+if source_id == entity_id:
+```
+
+and:
+
+```
+elif target_id == entity_id:
+```
+
+This is sufficient only when IDs uniquely identify entities across all entity types. A stronger design accepts both the entity type and ID:
+
+```
+def get_neighbors(        target_type = relationship[3]        target_id = relationship[4]        if (            relationship_type is not None            and current_relationship != relationship_type        ):            continue        if (            entity_type is not None            and source_type == entity_type            and source_id == entity_id        ):            neighbors.append({                "direction": "out",                "relationship": current_relationship,                "entity_type": target_type,                "entity_id": target_id,            })        elif (            entity_type is not None            and target_type == entity_type            and target_id == entity_id        ):            neighbors.append({                "direction": "in",                "relationship": current_relationship,                "entity_type": source_type,                "entity_id": source_id,            })        elif entity_type is None and source_id == entity_id:            neighbors.append({                "direction": "out",                "relationship": current_relationship,                "entity_type": target_type,                "entity_id": target_id,            })        elif entity_type is None and target_id == entity_id:            neighbors.append({                "direction": "in",                "relationship": current_relationship,                "entity_type": source_type,                "entity_id": source_id,            })    return neighbors
+```
+
+Important: This is an incremental design example, not yet a complete refactor. It preserves compatibility with existing callers that provide only an ID, but that legacy mode still matches by ID alone. For reliable typed traversal, the caller must supply `entity_type`, and the traversal and path methods must propagate both type and ID. We should update those together rather than mixing typed and untyped traversal.
+
+## 5. Recommended implementation order
+
+I would make these changes in stages:
+
+1. Change `_relationships()` to use `current_relationships()`.
+2. Run your existing tests and verify that outgoing, incoming, and neighbor queries no longer return stale process relationships.
+3. Introduce typed entity identity in neighbor queries.
+4. Update `traverse()`, `traverse_current()`, `shortest_path()`, and `impact_analysis()` to use consistent entity identity.
+5. Add tests for process lifecycle changes, typed entities, and historical relationships.
+
+One additional point: `visited` in your traversal methods currently contains only entity IDs. Once typed identity is introduced, `visited` should use `(entity_type, entity_id)` pairs as well.
+
+The best next step is to implement and test Step 1 first. That gives Galaxy consistent current-state behavior with minimal risk before we refactor typed graph traversal and begin correlation analysis.
+
+
+
+
+
+
+We can implement both requirements in your Galaxy `MachineGraph` without changing `SQLiteStore` or deleting any historical data.
+
+The idea is to give `MachineGraph` two explicit ways to query relationships:
+
+- Current mode (default): uses `store.current_relationships()` to represent the current system state.
+- Historical mode (opt-in): uses `store.all_relationships()` to inspect relationships from previous observations and process lifecycles.
+
+## 1. Understand the design
+
+Current relationships
+
+Default
+
+`store.current_relationships()`
+
+Used for current neighbors, incoming/outgoing relationships, traversal, impact analysis, and shortest paths unless historical mode is requested.
+
+Historical relationships
+
+Opt-in
+
+`store.all_relationships()`
+
+Used when you explicitly want to investigate stored history, such as previous process relationships or older dependency edges.
+
+The important principle is that the graph chooses which relationships to read; SQLite continues to retain the stored history.
+
+## 2. Step 1 — Modify `_relationships()`
+
+Open `core/graph/machine_graph.py` and replace your existing `_relationships()` method.
+
+Current code:
+
+```
+def _relationships(self):    return self.store.all_relationships()
+```
+
+Replace it with:
+
+```
+def _relationships(self, include_history=False):    if include_history:        return self.store.all_relationships()    return self.store.current_relationships()
+```
+
+### How does this work?
+
+| Method call                                  | Data returned            |
+| -------------------------------------------- | ------------------------ |
+| `self._relationships()`                      | Current relationships    |
+| `self._relationships(include_history=False)` | Current relationships    |
+| `self._relationships(include_history=True)`  | All stored relationships |
+
+The default argument `False` means that callers get current relationships unless they explicitly request history.
+
+## 3. Step 2 — Update outgoing and incoming queries
+
+Your current `get_outgoing()` and `get_incoming()` methods call `_relationships()` without arguments. They will now use current relationships by default.
+
+Add the `include_history` argument so callers can opt into historical data.
+
+Replace both methods with:
+
+```
+def get_outgoing(self, entity_id, include_history=False):    relationships = self._relationships(        include_history=include_history    )    results = []    for relationship in relationships:        source_id = relationship[1]        if source_id == entity_id:            results.append(relationship)    return resultsdef get_incoming(self, entity_id, include_history=False):    relationships = self._relationships(        include_history=include_history    )    results = []    for relationship in relationships:        target_id = relationship[4]        if target_id == entity_id:            results.append(relationship)    return results
+```
+
+Now you can use them like this:
+
+```
+# Current relationships (default)graph.get_outgoing("process:123")# Explicitly request historical relationshipsgraph.get_outgoing("process:123", include_history=True)# Current incoming relationshipsgraph.get_incoming("service:postgresql.service")# Historical incoming relationshipsgraph.get_incoming(    "service:postgresql.service",    include_history=True,)
+```
+
+The example IDs are illustrative; use identifiers that exist in your database.
+
+## 4. Step 3 — Update `get_neighbors()`
+
+Your existing method accepts an optional relationship list. Keep that feature because it allows traversal algorithms to load relationships once and reuse them.
+
+Change the beginning of `get_neighbors()` to this:
+
+```
+def get_neighbors(    self,    entity_id,    relationships=None,    relationship_type=None,    include_history=False,):    if relationships is None:        relationships = self._relationships(            include_history=include_history        )    neighbors = []    for relationship in relationships:        source_id = relationship[1]        current_relationship = relationship[2]        target_id = relationship[4]        if (            relationship_type is not None            and current_relationship != relationship_type        ):            continue        if source_id == entity_id:            neighbors.append({                "direction": "out",                "relationship": current_relationship,                "entity_id": target_id,            })        elif target_id == entity_id:            neighbors.append({                "direction": "in",
+```
+
+This preserves your current neighbor output format.
+
+Important: When you supply `relationships` directly, that list takes precedence over `include_history`. For example, `get_neighbors(entity_id, relationships=some_list)` uses `some_list` as provided. This is useful for consistent traversal.
+
+## 5. Step 4 — Update traversal to support both modes
+
+Your `traverse()` method currently calls `get_neighbors()` repeatedly, which could reload all relationships at each node.
+
+Instead, select the relationship set once and reuse it.
+
+Replace `traverse()` with:
+
+```
+def traverse(    self,    root_entity_id,    max_depth=3,    include_history=False,):    relationships = self._relationships(        include_history=include_history    )    visited = set()    def walk(entity_id, depth):        if depth > max_depth:            return None        if entity_id in visited:            return None        visited.add(entity_id)        node = {            "entity_id": entity_id,            "neighbors": [],        }        neighbors = self.get_neighbors(            entity_id,            relationships=relationships,        )        for neighbor in neighbors:            child = walk(                neighbor["entity_id"],                depth + 1,
+```
+
+Now both modes are available:
+
+```
+# Traverse current system stategraph.traverse("process:123")# Traverse all stored relationshipsgraph.traverse("process:123", include_history=True)
+```
+
+Your existing `traverse_current()` can remain as it is, since it already explicitly loads current relationships. You can simplify it later by delegating to `traverse()`.
+
+## 6. Step 5 — Update impact analysis and shortest path
+
+These methods should follow the same default behavior.
+
+For `impact_analysis()`, replace the method with:
+
+```
+def impact_analysis(self, entity_id, include_history=False):    incoming = self.get_incoming(        entity_id,        include_history=include_history,    )    outgoing = self.get_outgoing(        entity_id,        include_history=include_history,    )    return {        "affected_by": incoming,        "affects": outgoing,    }
+```
+
+For `shortest_path()`, add the `include_history` parameter and change how relationships are loaded:
+
+```
+def shortest_path(    self,    start_entity_id,    target_entity_id,    include_history=False,):    relationships = self._relationships(        include_history=include_history    )    # Keep the remainder of your existing BFS implementation.
+```
+
+Keep the rest of your existing breadth-first search (BFS) code unchanged for now.
+
+This makes both queries consistent:
+
+```
+# Current-state impact analysisgraph.impact_analysis("service:postgresql.service")# Historical impact analysisgraph.impact_analysis(    "service:postgresql.service",    include_history=True,)# Shortest path through current relationshipsgraph.shortest_path("process:123", "database:456")# Shortest path through historical relationshipsgraph.shortest_path(    "process:123",    "database:456",    include_history=True,)
+```
+
+## 7. Step 6 — Test the behavior
+
+First, verify that the store retains both kinds of data and that the current filter excludes the historical edges you expect.
+
+Run this from your Galaxy project directory:
+
+```
+python - <<'PY'
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+store = SQLiteStore()
+graph = MachineGraph(store)
+
+current = graph._relationships()
+historical = graph._relationships(include_history=True)
+
+print("Current relationships:", len(current))
+print("All stored relationships:", len(historical))
+
+assert len(current) <= len(historical)
+
+print("Relationship selection test passed.")
+PY
+```
+
+This is a basic sanity check, not a complete correctness test. The assertion is appropriate if `current_relationships()` is a filtered subset of `all_relationships()`, as in your implementation. For stronger verification, use a test database containing known current and historical process edges.
+
+You can also verify that the default and explicit historical methods select the intended datasets:
+
+```
+assert graph._relationships() == store.current_relationships()assert graph._relationships(include_history=True) == store.all_relationships()
+```
+
+### One detail to remember
+
+Your `current_relationships()` method deliberately makes an exception for `generated_by` relationships. Therefore, a current relationship query can retain a `generated_by` edge that refers to a historical process. That is existing store behavior, not a bug introduced by `MachineGraph`. Whether those edges should remain visible in the current graph is a separate design decision.
+
+## Final checklist
+
+Implementation progress
+
+0 of 6
+
+Update \_relationships() to select current or historical data.
+
+Add include_history to get_outgoing() and get_incoming().
+
+Add include_history to get_neighbors() while preserving explicit relationship lists.
+
+Update traverse() to load relationships once.
+
+Add include_history to impact_analysis() and shortest_path().
+
+Run tests with known current and historical relationships.
+
+My recommendation: implement these changes first, then test the graph with real Galaxy data. After that, the next improvement should be making graph traversal identify nodes by both `entity_type` and `entity_id`, so different entity types cannot be confused when IDs overlap.
+
+
+
+python - <<'PY'
+from types import SimpleNamespace
+
+import core.storage.sqlite_store as storage_module
+from core.storage.sqlite_store import SQLiteStore
+
+
+# Keep the test independent of application identity logic.
+storage_module.build_application_identity = lambda data: "app:test"
+
+
+class FakeStore:
+    def __init__(self):
+        self.relationships = [
+            # Log generated by a current process.
+            (
+                "log",
+                "log:test-current",
+                "generated_by",
+                "process",
+                "process:test-current",
+                "2026-10-12T10:00:00+00:00",
+            ),
+
+            # Log generated by a historical process.
+            (
+                "log",
+                "log:test-historical",
+                "generated_by",
+                "process",
+                "process:test-historical",
+                "2026-10-12T09:00:00+00:00",
+            ),
+        ]
+
+        self.processes = [
+            SimpleNamespace(
+                entity_id="process:test-current",
+                data={},
+            )
+        ]
+
+    def all_relationships(self):
+        return self.relationships
+
+    def latest_process_observations(self):
+        return self.processes
+
+
+store = FakeStore()
+
+# Call the actual method with our controlled fake store.
+current = SQLiteStore.current_relationships(store)
+historical = store.all_relationships()
+
+current_log = (
+    "log",
+    "log:test-current",
+    "generated_by",
+    "process",
+    "process:test-current",
+    "2026-10-12T10:00:00+00:00",
+)
+
+historical_log = (
+    "log",
+    "log:test-historical",
+    "generated_by",
+    "process",
+    "process:test-historical",
+    "2026-10-12T09:00:00+00:00",
+)
+
+# Case 1: Current process relationship remains visible.
+assert current_log in current, (
+    "FAIL: Current process log relationship was excluded"
+)
+print("PASS: Current process log relationship remains connected.")
+
+# Case 2: Historical process relationship is excluded.
+assert historical_log not in current, (
+    "FAIL: Historical process log relationship remains in current view"
+)
+print("PASS: Historical process log relationship is excluded.")
+
+# Case 3: Historical relationship remains stored.
+assert historical_log in historical, (
+    "FAIL: Historical relationship was lost from storage"
+)
+print("PASS: Historical log relationship remains in all_relationships().")
+
+print("\nAll three tests passed.")
+PY
+
+
+
+Absolutely. Let's go through the test step by step in beginner-friendly terms and connect each part to your Galaxy project.
+
+The purpose of this test is to verify that `SQLiteStore.current_relationships()` distinguishes between relationships belonging to current processes and relationships belonging to historical processes, without deleting historical records.
+
+## 1. The overall idea
+
+Imagine Galaxy has two log relationships:
+
+Log A
+
+Should remain
+
+`log:test-current → generated_by → process:test-current`
+
+The process is currently running, so its log relationship should appear in the current graph.
+
+Log B
+
+Should be excluded
+
+`log:test-historical → generated_by → process:test-historical`
+
+The process is no longer current, so the relationship should not appear in the current graph. It must still exist in historical storage.
+
+The test creates these two relationships, tells Galaxy that only the first process is current, and checks whether the results match expectations.
+
+## 2. Importing the required classes
+
+```
+from types import SimpleNamespaceimport core.storage.sqlite_store as storage_modulefrom core.storage.sqlite_store import SQLiteStore
+```
+
+Let's understand each line.
+
+- `SimpleNamespace` lets us create simple Python objects with attributes such as `entity_id` and `data`.
+- `storage_module` gives us access to the module containing the actual `SQLiteStore` implementation.
+- `SQLiteStore` lets us call the real `current_relationships()` method.
+
+Why use the real method? Because we're testing the filtering logic that you wrote in Galaxy, rather than creating a separate, fake implementation of that logic.
+
+## 3. Replacing the application identity helper
+
+```
+storage_module.build_application_identity = lambda data: "app:test"
+```
+
+This line temporarily replaces the function `build_application_identity()` with a very simple function.
+
+The original `current_relationships()` method calls this helper when building application identities from current process observations.
+
+But our test doesn't need to test application identity. We only want to test process-history filtering.
+
+The replacement means that whenever the method calls:
+
+```
+build_application_identity(observation.data)
+```
+
+it receives:
+
+```
+"app:test"
+```
+
+regardless of the input.
+
+The `lambda data: "app:test"` expression is a small anonymous function. The argument `data` is accepted but not used.
+
+Important: This is test isolation. It prevents unrelated application identity logic from interfering with this test. It does not change your source file on disk.
+
+## 4. Creating `FakeStore`
+
+```
+class FakeStore:    def __init__(self):        self.relationships = [            # Two test relationships        ]        self.processes = [            SimpleNamespace(                entity_id="process:test-current",                data={},            )        ]
+```
+
+`FakeStore` is a small substitute for your real storage object.
+
+Why do we need it? Your actual database contains thousands of relationships. For a focused test, we want to control exactly which relationships exist and which processes are current.
+
+The test defines two lists:
+
+- `self.relationships`: contains both the current-process and historical-process log relationships.
+- `self.processes`: contains only `process:test-current`.
+
+That second list is the most important part. It tells the filtering logic that `process:test-current` is current, while `process:test-historical` is not.
+
+`SimpleNamespace` creates an object that behaves like a simple observation:
+
+```
+observation.entity_idobservation.data
+```
+
+The empty dictionary `{}` represents the observation's data. Because our test replaces the application identity helper, we don't need realistic process data for this particular test.
+
+## 5. Creating the two relationships
+
+Each relationship is represented by a tuple:
+
+```
+(    "log",    "log:test-current",    "generated_by",    "process",    "process:test-current",    "2026-10-12T10:00:00+00:00",)
+```
+
+The tuple represents:
+
+| Position | Value                    | Meaning                        |
+| -------- | ------------------------ | ------------------------------ |
+| 0        | `"log"`                  | Source entity type             |
+| 1        | `"log:test-current"`     | Source entity ID               |
+| 2        | `"generated_by"`         | Relationship type              |
+| 3        | `"process"`              | Target entity type             |
+| 4        | `"process:test-current"` | Target entity ID               |
+| 5        | Timestamp                | When the relationship occurred |
+
+The second tuple has the same structure, but its process ID is `process:test-historical`.
+
+These are not observations of actual running processes. They are controlled examples for testing the relationship-filtering method.
+
+## 6. Providing the methods that `current_relationships()` expects
+
+```
+def all_relationships(self):    return self.relationshipsdef latest_process_observations(self):    return self.processes
+```
+
+These two methods make `FakeStore` behave like the portion of your real `SQLiteStore` that `current_relationships()` needs.
+
+When the real method calls:
+
+```
+relationships = self.all_relationships()
+```
+
+it receives the two test relationships.
+
+When it calls:
+
+```
+current_processes = self.latest_process_observations()
+```
+
+it receives only the current process.
+
+This technique is called a test double: a lightweight object that supplies controlled data to the code under test.
+
+## 7. Calling the real method with the fake store
+
+```
+store = FakeStore()current = SQLiteStore.current_relationships(store)historical = store.all_relationships()
+```
+
+This is the most interesting part.
+
+Normally, you call an instance method like this:
+
+```
+store.current_relationships()
+```
+
+But `store` here is a `FakeStore`, not an actual `SQLiteStore`.
+
+Instead, this code:
+
+```
+SQLiteStore.current_relationships(store)
+```
+
+calls the real `SQLiteStore.current_relationships()` function and explicitly passes the fake object as `self`.
+
+Python allows this because the method only needs the methods and attributes supplied by `FakeStore`. This is an example of duck typing.
+
+The variables now contain:
+
+- `current`: the result after the real filtering logic runs.
+- `historical`: both original test relationships, without filtering.
+
+Notice that `historical` isn't copied from `current`. It comes directly from the fake store's unfiltered relationship list.
+
+## 8. Understanding the three assertions
+
+An `assert` statement checks whether a condition is true. If it is false, Python raises an `AssertionError` and stops the test.
+
+### Test 1: Current process relationship remains
+
+```
+assert current_log in current, (    "FAIL: Current process log relationship was excluded")
+```
+
+This asks:
+
+> Does the current relationship list contain the log edge connected to the current process?
+
+The answer should be yes because `process:test-current` is in `current_process_ids`.
+
+Expected result:
+
+```
+PASS: Current process log relationship remains connected.
+```
+
+### Test 2: Historical process relationship is excluded
+
+```
+assert historical_log not in current, (    "FAIL: Historical process log relationship remains in current view")
+```
+
+This asks:
+
+> Is the log edge connected to the historical process absent from the current relationship list?
+
+The filtering code checks the target process ID:
+
+```
+if target_type == "process":    if target_id not in current_process_ids:        continue
+```
+
+Because `process:test-historical` is not in `current_process_ids`, the method skips this relationship.
+
+Expected result:
+
+```
+PASS: Historical process log relationship is excluded.
+```
+
+This is the assertion that should fail if you still have the old `generated_by` exception. With the exception in place, the stale process check is skipped for this relationship type.
+
+### Test 3: Historical relationship remains stored
+
+```
+assert historical_log in historical, (    "FAIL: Historical relationship was lost from storage")
+```
+
+This asks:
+
+> Even though the relationship was excluded from the current view, does it still exist in the unfiltered relationship list?
+
+The answer should be yes because the test never deletes or modifies that relationship.
+
+Expected result:
+
+```
+PASS: Historical log relationship remains in all_relationships().
+```
+
+This last test demonstrates the difference between filtering a relationship out of a view and deleting a relationship from storage.
+
+## 9. How the test fits into Galaxy
+
+FakeStore
+
+Two known relationships; one current process
+
+Real `SQLiteStore.current_relationships()` method
+
+Applies the actual filtering logic
+
+Current view
+
+Current-process edge retained
+
+Historical view
+
+Both edges retained
+
+The test verifies the filtering method in isolation. It does not test `MachineGraph`, the SQLite database itself, or whether real log collectors create the correct relationships.
+
+## 10. What I recommend next
+
+Once these three assertions pass, write a permanent automated test file, for example:
+
+`tests/test_current_relationships.py`
+
+That way, every time you modify `current_relationships()`, you can run the test again and catch regressions automatically.
+
+One additional detail worth testing later is whether a log relationship whose source is a process behaves correctly too. Your current example uses a log as the source and a process as the target, so it specifically verifies target-process filtering.
+
+
+
+
+In your `core/graph/machine_graph.py`, update `get_current_neighbors()` and `traverse_current()` to accept both `entity_type` and `entity_id`, just like your updated `get_neighbors()` and `traverse()` methods.
+
+## 1. Update `get_current_neighbors()`
+
+Replace your existing method with:
+
+```
+def get_current_neighbors(    self,    entity_type,    entity_id,    relationship_type=None,):    relationships = self.store.current_relationships()    return self.get_neighbors(        entity_type,        entity_id,        relationships=relationships,        relationship_type=relationship_type,    )
+```
+
+What changed?
+
+- It now accepts both `entity_type` and `entity_id`.
+- It uses only current relationships.
+- It passes the relationship list to `get_neighbors()`, avoiding another database query.
+- It optionally filters by `relationship_type`.
+
+Example:
+
+```
+neighbors = graph.get_current_neighbors("process", "123")print(neighbors)
+```
+
+## 2. Update `traverse_current()`
+
+Replace your existing method with:
+
+```
+def traverse_current(    self,    root_entity_type,    root_entity_id,    max_depth=3,):    relationships = self.store.current_relationships()    visited = set()    def walk(entity_type, entity_id, depth):        if depth > max_depth:            return None        node_key = (entity_type, entity_id)        if node_key in visited:            return None        visited.add(node_key)        node = {            "entity_type": entity_type,            "entity_id": entity_id,            "neighbors": [],        }        neighbors = self.get_neighbors(            entity_type,            entity_id,            relationships=relationships,        )        for neighbor in neighbors:            child = walk(                neighbor["entity_type"],                neighbor["entity_id"],                depth + 1,            )            if child is not None:                node["neighbors"].append({                    "relationship": neighbor["relationship"],                    "direction": neighbor["direction"],                    "node": child,                })        return node    return walk(root_entity_type, root_entity_id, 0)
+```
+
+The important change is:
+
+```
+node_key = (entity_type, entity_id)
+```
+
+Previously, your traversal tracked only `entity_id`. Now, a process with ID `"123"` and a service with ID `"123"` are treated as separate nodes.
+
+## 3. Test both methods directly in WSL
+
+Run this from `~/galaxy`:
+
+```
+python - <<'PY'
+from core.graph.machine_graph import MachineGraph
+
+
+class FakeStore:
+    def current_relationships(self):
+        return [
+            (
+                "process", "123",
+                "connects_to",
+                "service", "123",
+                "2026-10-12T10:00:00+00:00",
+            ),
+            (
+                "service", "123",
+                "depends_on",
+                "database", "db-1",
+                "2026-10-12T10:00:01+00:00",
+            ),
+        ]
+
+    def all_relationships(self):
+        return self.current_relationships()
+
+
+graph = MachineGraph(FakeStore())
+
+# Test current neighbors
+process_neighbors = graph.get_current_neighbors(
+    "process", "123"
+)
+
+assert len(process_neighbors) == 1
+assert process_neighbors[0]["entity_type"] == "service"
+
+service_neighbors = graph.get_current_neighbors(
+    "service", "123"
+)
+
+assert len(service_neighbors) == 2
+
+print("PASS: Current neighbors distinguish entity types.")
+
+# Test current traversal
+result = graph.traverse_current(
+    "process", "123", max_depth=3
+)
+
+assert result["entity_type"] == "process"
+assert result["entity_id"] == "123"
+
+service_node = result["neighbors"][0]["node"]
+
+assert service_node["entity_type"] == "service"
+assert service_node["entity_id"] == "123"
+
+database_node = service_node["neighbors"][0]["node"]
+
+assert database_node["entity_type"] == "database"
+assert database_node["entity_id"] == "db-1"
+
+print("PASS: Current traversal preserves composite identities.")
+print("\nAll current graph tests passed.")
+PY
+```
+
+Expected final output:
+
+```
+PASS: Current neighbors distinguish entity types.
+PASS: Current traversal preserves composite identities.
+
+All current graph tests passed.
+```
+
+## 4. Check your existing callers
+
+Because these methods now require two arguments for the root node, update any old calls such as:
+
+```
+graph.traverse_current("123")graph.get_current_neighbors("123")
+```
+
+to:
+
+```
+graph.traverse_current("process", "123")graph.get_current_neighbors("process", "123")
+```
+
+Your current graph traversal and historical graph traversal will now follow the same composite-identity rule, while still choosing different relationship sets.
+
+
+
+
+
+
+
+Let's create the initial Galaxy correlation files directly from your WSL terminal. This will create the package structure and foundational code without changing your existing collectors, storage, or graph.
+
+Run this entire command from WSL:
+
+```
+
+cd ~/galaxy
+source venv/bin/activate
+
+mkdir -p core/correlation/rules
+
+touch core/correlation/__init__.py
+touch core/correlation/rules/__init__.py
+
+cat > core/correlation/finding.py <<'PY'
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+
+
+@dataclass
+class Finding:
+    finding_id: str
+    rule_id: str
+    title: str
+    description: str
+    severity: str
+    affected_entities: list[dict[str, str]] = field(
+        default_factory=list
+    )
+    evidence: list[dict[str, Any]] = field(
+        default_factory=list
+    )
+    detected_at: str = field(
+        default_factory=lambda: datetime.now(
+            timezone.utc
+        ).isoformat()
+    )
+
+    def __post_init__(self):
+        allowed_severities = {
+            "info",
+            "low",
+            "medium",
+            "high",
+            "critical",
+        }
+
+        if self.severity not in allowed_severities:
+            raise ValueError(
+                f"Invalid severity: {self.severity}"
+            )
+
+        if not self.finding_id:
+            raise ValueError("finding_id cannot be empty")
+
+        if not self.rule_id:
+            raise ValueError("rule_id cannot be empty")
+PY
+
+cat > core/correlation/correlation_rule.py <<'PY'
+from abc import ABC, abstractmethod
+
+
+class CorrelationRule(ABC):
+    rule_id = "base_rule"
+    description = "Base correlation rule"
+
+    @abstractmethod
+    def evaluate(self, observations, graph):
+        """
+        Evaluate observations and graph relationships.
+
+        Return a list of Finding objects.
+        """
+        raise NotImplementedError
+PY
+
+cat > core/correlation/correlation_engine.py <<'PY'
+from core.correlation.finding import Finding
+
+
+class CorrelationEngine:
+    def __init__(self, store, graph, rules=None):
+        self.store = store
+        self.graph = graph
+        self.rules = list(rules or [])
+
+    def register_rule(self, rule):
+        if any(
+            existing.rule_id == rule.rule_id
+            for existing in self.rules
+        ):
+            raise ValueError(
+                f"Duplicate correlation rule: {rule.rule_id}"
+            )
+
+        self.rules.append(rule)
+
+    def run_once(self):
+        observations = self.store.all()
+        findings = []
+
+        for rule in self.rules:
+            rule_findings = rule.evaluate(
+                observations,
+                self.graph,
+            )
+
+            if rule_findings is None:
+                raise TypeError(
+                    f"Rule {rule.rule_id} returned None; "
+                    "expected a list of Finding objects"
+                )
+
+            if not isinstance(rule_findings, list):
+                raise TypeError(
+                    f"Rule {rule.rule_id} must return "
+                    "a list of Finding objects"
+                )
+
+            for finding in rule_findings:
+                if not isinstance(finding, Finding):
+                    raise TypeError(
+                        f"Rule {rule.rule_id} returned "
+                        "an invalid finding"
+                    )
+
+            findings.extend(rule_findings)
+
+        return findings
+PY
+
+cat > core/correlation/__init__.py <<'PY'
+from core.correlation.correlation_engine import CorrelationEngine
+from core.correlation.correlation_rule import CorrelationRule
+from core.correlation.finding import Finding
+
+__all__ = [
+    "CorrelationEngine",
+    "CorrelationRule",
+    "Finding",
+]
+PY
+
+echo "Correlation foundation files created."
+
+```
+
+## Verify the files
+
+Run:
+
+```
+find core/correlation -maxdepth 3 -type f -name '*.py' | sort
+```
+
+You should see:
+
+```
+core/correlation/__init__.py
+core/correlation/correlation_engine.py
+core/correlation/correlation_rule.py
+core/correlation/finding.py
+core/correlation/rules/__init__.py
+```
+
+Then check the Python syntax and imports:
+
+```
+python -m compileall -q core/correlation
+
+python -c "from core.correlation import CorrelationEngine, CorrelationRule, Finding; print('Correlation imports OK')"
+```
+
+Expected output:
+
+```
+Correlation imports OK
+```
+
+## What we've created
+
+- `finding.py` — standard structure for a detected problem, including severity, affected entities, and evidence.
+- `correlation_rule.py` — common interface that every correlation rule must implement.
+- `correlation_engine.py` — loads observations from your store, runs registered rules against the observations and `MachineGraph`, and collects findings.
+- `rules/` — directory where we will add individual detection rules.
+
+This is the foundation only; it does not detect any issues yet or persist findings. The next implementation step is to add the first real correlation rule and test it against Galaxy's existing observations and typed graph relationships.
