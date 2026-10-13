@@ -1,0 +1,666 @@
+For Galaxy, I recommend keeping `Finding` in `core/correlation/finding.py` for now, rather than moving it to `core/models/`.
+
+The important factor is how Galaxy organizes its models and responsibilities.
+
+## Recommended structure
+
+```
+core/
+├── models/
+│   ├── observation.py
+│   └── relationship.py
+│
+├── correlation/
+│   ├── __init__.py
+│   ├── correlation_engine.py
+│   ├── correlation_rule.py
+│   ├── finding.py
+│   └── rules/
+│       ├── __init__.py
+│       └── high_cpu_process_rule.py
+│
+├── graph/
+└── storage/
+```
+
+## Why keep `Finding` under `correlation`?
+
+- `Observation` represents collected information about a system entity.
+- `Relationship` represents a connection between two entities.
+- `Finding` represents a problem or condition detected by an intelligence rule.
+- `CorrelationEngine` runs rules and gathers their findings.
+
+A finding is an output of Galaxy's intelligence layer, not a raw observation. Keeping it under `core/correlation/` makes that responsibility clear.
+
+### When would `core/models/finding.py` make sense?
+
+If findings later become a shared domain model used by several independent modules—for example, correlation, alerting, recommendations, approval workflows, and reporting—then moving it to `core/models/` could be justified.
+
+For now, that would add a move without providing much benefit.
+
+My recommendation: leave `finding.py` where it is and continue with the high-CPU rule. Next, we should inspect the contents of `correlation_engine.py`, `correlation_rule.py`, and `finding.py` to confirm their interfaces match before running the end-to-end test.
+
+
+
+Good, we've identified what's happening. Your graph is behaving consistently with the data it has.
+
+The process `pid:1736@1790763992.66` is not present in the latest process observations and has no stored relationships. The CPU finding refers to a process observation that is no longer available in the current process snapshot.
+
+This is an important distinction for Galaxy: a finding can be valid when detected but refer to an entity that is no longer active.
+
+## Next: improve the CPU rule to identify stale processes
+
+Before adding graph-aware correlation, let's make the CPU rule explicitly identify the process at detection time and include its CPU measurement as evidence. Then we can add lifecycle tracking so Galaxy can distinguish active findings from findings about processes that have exited.
+
+One immediate improvement is to check whether the rule is operating on the latest process observations or on all stored observations. Your engine currently does:
+
+```
+observations = self.store.all()
+```
+
+That loads all stored observations, potentially including historical process observations. For a real-time CPU alert, this is risky: an old observation could repeatedly trigger a finding.
+
+### Check how `store.all()` behaves
+
+Run this directly in WSL:
+
+```
+cd ~/galaxy
+source venv/bin/activate
+
+python - <<'PY'
+from collections import Counter
+from core.storage.sqlite_store import SQLiteStore
+
+store = SQLiteStore()
+observations = store.all()
+
+print("Total observations:", len(observations))
+print("Observation counts by type:")
+
+for entity_type, count in sorted(
+    Counter(o.entity_type for o in observations).items()
+):
+    print(f"  {entity_type}: {count}")
+
+print("\nLatest process observations:")
+for process in store.latest_process_observations()[:10]:
+    print(
+        process.entity_id,
+        "CPU =", process.data.get("cpu_percent"),
+        "name =", process.data.get("name"),
+    )
+PY
+```
+
+This will tell us whether `store.all()` includes historical process snapshots and show the currently tracked processes.
+
+Why this comes before another rule: we should make sure the correlation engine uses the right observation set. Otherwise, adding more rules could produce stale or repeated alerts. Once we confirm the behavior, we'll make the engine distinguish current-state detection from historical investigation, then add the first relationship-aware correlation rule.
+
+
+
+ grep -nEi 'finding|CREATE TABLE|lifecycle' core/storage/sqlite_store.py
+32:        #     CREATE TABLE IF NOT EXISTS observations (
+45:        CREATE TABLE IF NOT EXISTS observations (
+68:            CREATE TABLE IF NOT EXISTS lifecycle_events (
+79:    def save_lifecycle_events(self, events):
+93:            INSERT INTO lifecycle_events
+249:        #     CREATE TABLE IF NOT EXISTS relationships (
+260:        """CREATE TABLE IF NOT EXISTS relationships (
+414:    def all_lifecycle_events(self):
+423:            FROM lifecycle_events
+439:            FROM lifecycle_events
+458:            FROM lifecycle_events
+477:            FROM lifecycle_events
+(venv) marsh@Marshall:~/galaxy$ find core/correlation -maxdepth 3 -type f -name '*.py' | sort
+core/correlation/__init__.py
+core/correlation/correlation_engine copy.py
+core/correlation/correlation_engine.py
+core/correlation/correlation_rule.py
+core/correlation/finding.py
+core/correlation/rules/__init__.py
+core/correlation/rules/high_cpu_process_rule.py
+core/correlation/rules/high_memory_process_rule.py
+(venv) marsh@Marshall:~/galaxy$ grep -nE '^    def ' core/storage/sqlite_store.py
+12:    def __init__(self, db_path: str = "galaxy.db"):
+18:    def _row_to_observation(self, row):
+30:    def _create_table(self):
+79:    def save_lifecycle_events(self, events):
+102:    def save(self, observations: list[Observation]):
+127:    def all(self):
+139:    def count(self):
+147:    def latest(self):
+166:    def find_by_entity(self, entity_type, entity_id):
+186:    def latest_observations_by_entity_type(self, entity_type):
+215:    def latest_process_observations(self):
+247:    def _create_relationships_table(self):
+286:    def save_relationships(
+334:    def all_relationships(self):
+351:    def get_latest_relationship(self):
+372:    def get_children(self, parent_entity_id):
+393:    def get_parent(self, child_entity_id):
+414:    def all_lifecycle_events(self):
+431:    def get_recent_starts(self, limit=10):
+450:    def get_recent_exits(self, limit=10):
+469:    def get_process_history(self, entity_id):
+487:    def current_relationships(self):
+588:    def current_relationshipsOld(self):
+
+
+Excellent! ✅ All four finding lifecycle tests passed. This confirms that your Galaxy `FindingStore` handles the basic finding lifecycle correctly.
+
+## What you have verified
+
+| Test               | Result | Meaning                                                                             |
+| ------------------ | ------ | ----------------------------------------------------------------------------------- |
+| New finding        | PASS   | A detected problem is saved as `active`.                                            |
+| Repeated finding   | PASS   | The same problem updates its evidence and `last_seen` without creating a duplicate. |
+| Problem disappears | PASS   | The finding becomes `resolved` and receives a `resolved_at` timestamp.              |
+| Problem returns    | PASS   | The finding becomes `active` again, while preserving its original `first_seen`.     |
+
+Your current design also separates responsibilities properly:
+
+- `CorrelationRule` detects a problem.
+- `CorrelationEngine` runs the rules against observations and the system graph.
+- `FindingStore` persists findings and tracks their lifecycle.
+
+## Next step: Add `occurrence_count`
+
+This will let Galaxy record how many evaluation cycles have detected the same problem. For example, if a process exceeds the CPU threshold five times, the same finding can remain a single record with an occurrence count of five.
+
+Let's implement it carefully, one step at a time.
+
+## Step 1: Update `core/storage/finding_store.py`
+
+### 1. Add the database column
+
+Inside `_create_table()`, add this field to the `CREATE TABLE` definition:
+
+```
+occurrence_count INTEGER NOT NULL DEFAULT 1,
+```
+
+For example, place it after `last_seen`:
+
+```
+first_seen TEXT NOT NULL,
+last_seen TEXT NOT NULL,
+occurrence_count INTEGER NOT NULL DEFAULT 1,
+status TEXT NOT NULL DEFAULT 'active',
+resolved_at TEXT
+```
+
+Important: Your existing `galaxy.db` may already have the `findings` table. SQLite will not automatically add a new column to an existing table, so add a migration after the `CREATE TABLE` statement:
+
+```
+columns = {    row[1]    for row in self.conn.execute(        "PRAGMA table_info(findings)"    ).fetchall()}if "occurrence_count" not in columns:    self.conn.execute("""        ALTER TABLE findings        ADD COLUMN occurrence_count INTEGER NOT NULL DEFAULT 1    """)self.conn.commit()
+```
+
+This supports both new and existing databases.
+
+## Step 2: Update `save_evaluation()`
+
+In the `INSERT INTO findings` statement, include `occurrence_count` in the column list:
+
+```
+finding_id, rule_id, title, description, severity,
+affected_entities, evidence, first_seen, last_seen,
+occurrence_count, status, resolved_at
+```
+
+Update the `VALUES` section to:
+
+```
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'active', NULL)
+```
+
+The `1` means a newly created finding has been detected once.
+
+Then, in the `ON CONFLICT(finding_id) DO UPDATE SET` section, add:
+
+```
+occurrence_count = findings.occurrence_count + 1,
+```
+
+This increments the count whenever an existing finding is detected again. Keep the existing `first_seen` unchanged.
+
+## Step 3: Return the new field
+
+In `all_findings()`, add `occurrence_count` to the `SELECT` statement, immediately after `last_seen`:
+
+```
+last_seen, occurrence_count, status, resolved_at
+```
+
+Then update the returned dictionary indices to match the revised column order:
+
+```
+"last_seen": row[8],"occurrence_count": row[9],"status": row[10],"resolved_at": row[11],
+```
+
+The new column shifts the indices of the last three fields.
+
+## Step 4: Test the counter
+
+Run this from `~/galaxy` with your virtual environment active:
+
+```
+python - <<'PY'
+import os
+import tempfile
+from datetime import datetime, timezone, timedelta
+
+from core.correlation.finding import Finding
+from core.storage.finding_store import FindingStore
+
+fd, db_path = tempfile.mkstemp(suffix=".db")
+os.close(fd)
+
+store = FindingStore(db_path)
+
+rule_id = "high_cpu_process"
+finding_id = "high_cpu_process:test-process"
+
+def make_finding(detected_at, cpu):
+    return Finding(
+        finding_id=finding_id,
+        rule_id=rule_id,
+        title="High CPU usage detected",
+        description="Test process is using high CPU.",
+        severity="high",
+        affected_entities=[
+            {
+                "entity_type": "process",
+                "entity_id": "test-process",
+            }
+        ],
+        evidence=[
+            {
+                "metric": "cpu_percent",
+                "value": cpu,
+                "threshold": 80.0,
+            }
+        ],
+        detected_at=detected_at.isoformat(),
+    )
+
+try:
+    first = datetime.now(timezone.utc)
+    second = first + timedelta(minutes=5)
+    third = second + timedelta(minutes=5)
+
+    store.save_evaluation([make_finding(first, 85)], [rule_id])
+    assert store.all_findings()[0]["occurrence_count"] == 1
+    print("PASS: first detection = 1")
+
+    store.save_evaluation([make_finding(second, 92)], [rule_id])
+    row = store.all_findings()[0]
+    assert row["occurrence_count"] == 2
+    assert row["first_seen"] == first.isoformat()
+    print("PASS: repeated detection = 2")
+
+    store.save_evaluation([], [rule_id])
+    assert store.all_findings()[0]["status"] == "resolved"
+    print("PASS: finding resolved")
+
+    store.save_evaluation([make_finding(third, 88)], [rule_id])
+    row = store.all_findings()[0]
+    assert row["occurrence_count"] == 3
+    assert row["status"] == "active"
+    assert row["resolved_at"] is None
+    print("PASS: reactivated detection = 3")
+
+    print("\nAll occurrence-count tests passed.")
+
+finally:
+    store.close()
+    for suffix in ("", "-journal", "-wal", "-shm"):
+        path = db_path + suffix
+        if os.path.exists(path):
+            os.remove(path)
+PY
+```
+
+Expected final output:
+
+```
+PASS: first detection = 1
+PASS: repeated detection = 2
+PASS: finding resolved
+PASS: reactivated detection = 3
+
+All occurrence-count tests passed.
+```
+
+Once this passes, Galaxy will track both finding status and how often the problem has been detected. One design distinction to keep in mind: this counter measures detection cycles, not necessarily the number of separate real-world incidents.
+
+
+
+Great! Your tests passed, so let's understand why we added the database migration and what each line does.
+
+## 1. The problem we are solving
+
+In Galaxy, your `FindingStore` creates a SQLite table called `findings`.
+
+When you first create the table, your SQL might look like this:
+
+```
+CREATE TABLE IF NOT EXISTS findings (
+    finding_id TEXT PRIMARY KEY,
+    rule_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    resolved_at TEXT
+);
+```
+
+Later, you decide to add a new column:
+
+```
+occurrence_count INTEGER NOT NULL DEFAULT 1
+```
+
+You might expect `CREATE TABLE IF NOT EXISTS` to update the existing table automatically. It does not.
+
+It only creates the table if it doesn't already exist.
+
+### Before and after
+
+Existing database
+
+finding_id
+
+rule_id
+
+first_seen
+
+last_seen
+
+status
+
+Run the migration
+
+Updated database
+
+finding_id
+
+rule_id
+
+first_seen
+
+last_seen
+
+occurrence_count
+
+status
+
+The migration checks whether `occurrence_count` exists and adds it only if it is missing.
+
+## 2. Understand the migration line by line
+
+### Step A: Read the existing column names
+
+```
+columns = {    row[1]    for row in self.conn.execute(        "PRAGMA table_info(findings)"    ).fetchall()}
+```
+
+Let's break this down.
+
+1\. `PRAGMA table_info(findings)`
+
+This is a SQLite command that asks:
+
+> What columns currently exist in the `findings` table?
+
+For example, SQLite might return rows similar to these:
+
+```
+(0, 'finding_id', 'TEXT', 1, None, 1)
+(1, 'rule_id', 'TEXT', 1, None, 0)
+(2, 'first_seen', 'TEXT', 1, None, 0)
+(3, 'last_seen', 'TEXT', 1, None, 0)
+(4, 'status', 'TEXT', 1, "'active'", 0)
+```
+
+Each row contains information about one column. The second item, `row[1]`, is the column's name.
+
+For example:
+
+```
+row = (0, 'finding_id', 'TEXT', 1, None, 1)print(row[1])
+```
+
+Output:
+
+```
+finding_id
+```
+
+2\. `.fetchall()`
+
+```
+self.conn.execute(    "PRAGMA table_info(findings)").fetchall()
+```
+
+- `execute()` runs the SQLite command.
+- `fetchall()` retrieves all the rows returned by that command.
+
+3\. `{row[1] for row in ...}`
+
+This is called a set comprehension. It collects the second item from every row into a set.
+
+The resulting `columns` variable looks like this:
+
+```
+{    "finding_id",    "rule_id",    "title",    "first_seen",    "last_seen",    "status",    "resolved_at"}
+```
+
+Your actual set depends on the columns in your database.
+
+Why use a set? Because it makes checking whether a column exists straightforward.
+
+### Step B: Check whether the new column is missing
+
+```
+if "occurrence_count" not in columns:
+```
+
+This asks:
+
+> Is `occurrence_count` absent from the existing table?
+
+- If the column exists, the condition is `False`. Nothing is changed.
+- If the column is missing, the condition is `True`. The code enters the `if` block.
+
+This makes the migration safe to run again without trying to add the same column repeatedly.
+
+### Step C: Add the missing column
+
+```
+self.conn.execute("""    ALTER TABLE findings    ADD COLUMN occurrence_count INTEGER NOT NULL DEFAULT 1""")
+```
+
+Here is what each part means:
+
+| SQL                           | Meaning                                     |
+| ----------------------------- | ------------------------------------------- |
+| `ALTER TABLE findings`        | Modify the existing table.                  |
+| `ADD COLUMN occurrence_count` | Add a new column named `occurrence_count`.  |
+| `INTEGER`                     | Store an integer, such as `1`, `2`, or `3`. |
+| `NOT NULL`                    | Do not allow the value to be `NULL`.        |
+| `DEFAULT 1`                   | Use `1` when no value is provided.          |
+
+Why `DEFAULT 1`?
+
+Imagine your database already contains 20 findings. When SQLite adds this column, existing records need a valid value. The default of `1` gives those records an initial occurrence count.
+
+It also means a new finding can start with a count of `1` when the insert statement doesn't explicitly supply another value.
+
+### Step D: Save the database changes
+
+```
+self.conn.commit()
+```
+
+`commit()` confirms the database changes made in the current transaction.
+
+Without committing, changes may not be permanently saved as expected, depending on the connection and transaction behavior.
+
+In your code, this commit follows both the table creation and the conditional migration.
+
+## 3. Where does this code belong?
+
+Inside `core/storage/finding_store.py`, put the migration in `_create_table()`, immediately after the `CREATE TABLE IF NOT EXISTS findings` statement has executed.
+
+The method should follow this structure:
+
+```
+def _create_table(self):    self.conn.execute("""        CREATE TABLE IF NOT EXISTS findings (            finding_id TEXT PRIMARY KEY,            rule_id TEXT NOT NULL,            title TEXT NOT NULL,            description TEXT NOT NULL,            severity TEXT NOT NULL,            affected_entities TEXT NOT NULL,            evidence TEXT NOT NULL,            first_seen TEXT NOT NULL,            last_seen TEXT NOT NULL,            occurrence_count INTEGER NOT NULL DEFAULT 1,            status TEXT NOT NULL DEFAULT 'active',            resolved_at TEXT        )    """)    columns = {        row[1]        for row in self.conn.execute(            "PRAGMA table_info(findings)"        ).fetchall()    }    if "occurrence_count" not in columns:        self.conn.execute("""            ALTER TABLE findings            ADD COLUMN occurrence_count INTEGER NOT NULL DEFAULT 1        """)    self.conn.commit()
+```
+
+Notice that the new table definition already includes `occurrence_count`. The migration handles the other case: a table that was created before you introduced that column.
+
+## 4. What happens when Galaxy starts?
+
+1. Galaxy opens `galaxy.db` and calls `_create_table()`.
+2. SQLite creates `findings` if the table doesn't exist.
+3. Galaxy reads the table's column names using `PRAGMA table_info(findings)`.
+4. If `occurrence_count` is missing, Galaxy adds it. Otherwise, it leaves the table unchanged.
+5. Galaxy commits the changes and continues running.
+
+The key concept: A database schema migration changes the structure of an existing database while preserving its existing records. Your code performs a small, conditional migration whenever `FindingStore` initializes.
+
+Your successful tests confirm that the occurrence counter behaves correctly through creation, repeated detection, resolution, and reactivation. The migration is what makes that new column work for databases created before the change as well as fresh databases.
+
+
+
+
+For Galaxy, I recommend completing the correlation work in this order. The key is to make detection reliable first, preserve its history second, and build intelligence on top of trustworthy evidence.
+
+## Recommended Galaxy correlation roadmap
+
+1 · Do next
+
+Validate correlation rule results
+
+Verify that every rule returns a list of valid `Finding` objects. If any rule fails, do not persist a partial evaluation or resolve findings incorrectly.
+
+Foundation: safe and reliable execution.
+
+2 · Detection coverage
+
+Add a database health rule
+
+Use your existing database observations to detect genuine problems, such as unhealthy database status or excessive locks. Define thresholds and evidence carefully.
+
+Foundation: more useful detections.
+
+3 · Traceability
+
+Implement Correlation History
+
+Record evaluation runs, rules executed, outcomes, findings detected, and finding state transitions. Failed or incomplete runs must be distinguishable from successful runs.
+
+Foundation: explain what Galaxy detected and when.
+
+4 · System-wide intelligence
+
+Correlate related findings
+
+Connect CPU, memory, services, logs, and database findings using your typed system graph, timestamps, and entity relationships.
+
+Goal: identify symptoms that may share a cause.
+
+5 · Diagnostic intelligence
+
+Analysis and recommendations
+
+Explain the evidence, identify plausible causes, express uncertainty, and suggest appropriate next actions.
+
+Goal: move from detection to diagnosis.
+
+6 · Advanced stage
+
+AI reasoning and approval workflow
+
+Once the evidence, history, and deterministic analysis are reliable, add AI-assisted reasoning and a human approval step before any consequential remediation.
+
+## Why put Correlation History before finding correlation?
+
+Because when Galaxy links several findings together, you will want to answer questions such as:
+
+- Which findings appeared first?
+- Did the database problem occur before the service problem?
+- Did the CPU issue resolve when the service recovered?
+- What evidence supported the suspected common cause?
+- Did the rule complete successfully, or was its evaluation incomplete?
+
+Correlation History gives you the information needed to answer those questions. You do not need to build a full history subsystem before adding the database health rule, but it should come before advanced cross-system analysis.
+
+## Where the current work stands
+
+Your correlation foundation—including `Finding`, `CorrelationRule`, `CorrelationEngine`, `FindingStore`, lifecycle handling, and occurrence counting—has passed the tests you reported.
+
+My recommendation: start with Step 1, rule-result validation. Then add the database health rule, implement Correlation History, and move into cross-system finding correlation. This keeps Galaxy's architecture dependable as it grows.
+
+
+
+
+
+python - <<'PY'
+from datetime import datetime, timedelta, timezone
+
+from core.orchestrator import Orchestrator
+from core.graph.machine_graph import MachineGraph
+from core.correlation.finding import Finding
+from core.correlation.system_correlator import SystemCorrelator
+from core.correlation.relationship_weights import relationship_weight
+
+
+def timestamp(offset_seconds=0):
+    return (
+        datetime.now(timezone.utc)
+        + timedelta(seconds=offset_seconds)
+    ).isoformat()
+
+
+def make_finding(
+    finding_id,
+    entity_type,
+    entity_id,
+    detected_at=None,
+):
+    return Finding(
+        finding_id=finding_id,
+        rule_id="integration_test",
+        title=f"Test finding {finding_id}",
+        description="Temporary integration-test finding.",
+        severity="high",
+        affected_entities=[
+            {
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+            }
+        ],
+        detected_at=detected_at or timestamp(),
+    )
+
+
+# Use Galaxy's existing graph for the first three tests.
+orchestrator = Orchestrator()
+graph = MachineGraph(orchestrator.store)
+correlator = SystemCorrelator(graph)
+
+service = ("service", "postgresql")
+PYint("\nAll four correlation tests passed.")_evidence[0]["weight"])ationship"])
+PASS 1: Findings outside the 300-second window do not correlate.
+PASS 2: Disconnected entities do not correlate.
+PASS 3: Findings on the same entity correlate with confidence 1.0.
+PASS 4: Strongest relationship selected between the same nodes.
+Selected relationship: owns_connection
+Selected weight: 0.9
+Confidence: 0.9
+
+All four correlation tests passed.

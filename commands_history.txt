@@ -1214,3 +1214,1334 @@ for r in graph.get_current_relationships():
  1685  touch core/correlation/correlation_engine.py
  1686  python main.py
  1687  history > commands_history.txt
+
+
+
+
+ 06  cd galaxy
+ 1107  source venv/bin/activate
+ 1108  code .
+ 1109  python main.py
+ 1110  python -c "
+ 1111  from core.orchestrator import Orchestrator
+ 1112  from core.graph.machine_graph import MachineGraph
+ 1113  from core.correlation.correlation_engine import CorrelationEngine
+ 1114  o = Orchestrator()
+ 1115  observations, relationships = o.run_once()
+ 1116  graph = MachineGraph(o.store)
+ 1117  host = next(
+ 1118      obs for obs in observations
+ 1119      if obs.entity_type == 'host'
+ 1120  )
+ 1121  host.data['cpu'] = 95
+ 1122  neighbors = graph.get_current_neighbors(
+ 1123      host.entity_id
+ 1124  )
+ 1125  process_ids = {
+ 1126      n['entity_id']
+ 1127      for n in neighbors
+ 1128      if (
+ 1129          n['relationship'] == 'runs'
+ 1130          and n['direction'] == 'out'
+ 1131      )
+ 1132  }
+ 1133  process = next(
+ 1134      obs for obs in observations
+ 1135      if (
+ 1136          obs.entity_type == 'process'
+ 1137          and obs.entity_id in process_ids
+ 1138      )
+ 1139  )
+ 1140  process.data['cpu_percent'] = 80
+ 1141  engine = CorrelationEngine(graph)
+ 1142  findings = engine.analyze(
+ 1143      observations
+ 1144  )
+ 1145  print('FINDINGS:', len(findings))
+ 1146  for finding in findings:
+ 1147      print()
+ 1148      print('ID:', finding.id)
+ 1149      print('RULE:', finding.rule_name)
+ 1150      print('STATUS:', finding.status)
+ 1151      print('FIRST SEEN:', finding.first_seen)
+ 1152      print('LAST SEEN:', finding.last_seen)
+ 1153      print('OCCURRENCES:', finding.occurrences)
+ 1154      print('DESCRIPTION:', finding.description)
+ 1155  "
+ 1156  python -c "
+ 1157  from core.orchestrator import Orchestrator
+ 1158  from core.graph.machine_graph import MachineGraph
+ 1159  from core.correlation.correlation_engine import CorrelationEngine
+ 1160  o = Orchestrator()
+ 1161  observations, relationships = o.run_once()
+ 1162  graph = MachineGraph(o.store)
+ 1163  host = next(
+ 1164      obs for obs in observations
+ 1165      if obs.entity_type == 'host'
+ 1166  )
+ 1167  host.data['cpu'] = 95
+ 1168  neighbors = graph.get_current_neighbors(
+ 1169      host.entity_id
+ 1170  )
+ 1171  process_ids = {
+ 1172      n['entity_id']
+ 1173      for n in neighbors
+ 1174      if (
+ 1175          n['relationship'] == 'runs'
+ 1176          and n['direction'] == 'out'
+ 1177      )
+ 1178  }
+ 1179  process = next(
+ 1180      obs for obs in observations
+ 1181      if (
+ 1182          obs.entity_type == 'process'
+ 1183          and obs.entity_id in process_ids
+ 1184      )
+ 1185  )
+ 1186  process.data['cpu_percent'] = 80
+ 1187  engine = CorrelationEngine(graph)
+ 1188  findings = engine.analyze(
+ 1189      observations
+ 1190  )
+ 1191  print('FINDINGS:', len(findings))
+ 1192  for finding in findings:
+ 1193      print()
+ 1194      print('ID:', finding.id)
+ 1195      print('RULE:', finding.rule_name)
+ 1196      print('STATUS:', finding.status)
+ 1197      print('FIRST SEEN:', finding.first_seen)
+ 1198      print('LAST SEEN:', finding.last_seen)
+ 1199      print('OCCURRENCES:', finding.occurrences)
+ 1200      print('DESCRIPTION:', finding.description)
+ 1201  "
+ 1202  nano core/correlation/finding_store.py
+ 1203  python -c "
+ 1204  from core.correlation.finding_store import FindingStore
+ 1205  store = FindingStore()
+ 1206  print(store.findings)
+ 1207  "
+ 1208  python -c "
+ 1209  from core.correlation.finding_store import FindingStore
+ 1210  from core.correlation.finding import Finding
+ 1211  from datetime import datetime, timezone
+ 1212  store = FindingStore()
+ 1213  now = datetime.now(timezone.utc)
+ 1214  finding = Finding(
+ 1215      id='test-finding-1',
+ 1216      rule_name='TestRule',
+ 1217      severity='warning',
+ 1218      title='Test finding',
+ 1219      description='Testing FindingStore',
+ 1220      evidence={},
+ 1221      status='active',
+ 1222      first_seen=now,
+ 1223      last_seen=now,
+ 1224      occurrences=1
+ 1225  )
+ 1226  store.add(finding)
+ 1227  print('FINDINGS:', len(store.findings))
+ 1228  print('ID:', list(store.findings.keys())[0])
+ 1229  "
+ 1230  python -c "
+ 1231  from core.correlation.finding_store import FindingStore
+ 1232  from core.correlation.finding import Finding
+ 1233  from datetime import datetime, timezone, timedelta
+ 1234  store = FindingStore()
+ 1235  now = datetime.now(timezone.utc)
+ 1236  finding1 = Finding(
+ 1237      id='test-finding-1',
+ 1238      rule_name='TestRule',
+ 1239      severity='warning',
+ 1240      title='Test finding',
+ 1241      description='Testing FindingStore',
+ 1242      evidence={},
+ 1243      status='active',
+ 1244      first_seen=now,
+ 1245      last_seen=now,
+ 1246      occurrences=1
+ 1247  )
+ 1248  store.add(finding1)
+ 1249  later = now + timedelta(seconds=10)
+ 1250  finding2 = Finding(
+ 1251      id='test-finding-1',
+ 1252      rule_name='TestRule',
+ 1253      severity='warning',
+ 1254      title='Test finding',
+ 1255      description='Testing FindingStore',
+ 1256      evidence={},
+ 1257      status='active',
+ 1258      first_seen=later,
+ 1259      last_seen=later,
+ 1260      occurrences=1
+ 1261  )
+ 1262  result = store.add(finding2)
+ 1263  print('FINDINGS:', len(store.findings))
+ 1264  print('OCCURRENCES:', result.occurrences)
+ 1265  print('FIRST SEEN:', result.first_seen)
+ 1266  print('LAST SEEN:', result.last_seen)
+ 1267  "
+ 1268  python -c "
+ 1269  from core.correlation.finding_store import FindingStore
+ 1270  from core.correlation.finding import Finding
+ 1271  from datetime import datetime, timezone, timedelta
+ 1272  store = FindingStore()
+ 1273  now = datetime.now(timezone.utc)
+ 1274  finding1 = Finding(
+ 1275      id='test-finding-1',
+ 1276      rule_name='TestRule',
+ 1277      severity='warning',
+ 1278      title='Test finding',
+ 1279      description='Testing FindingStore',
+ 1280      evidence={},
+ 1281      status='active',
+ 1282      first_seen=now,
+ 1283      last_seen=now,
+ 1284      occurrences=1
+ 1285  )
+ 1286  store.add(finding1)
+ 1287  later = now + timedelta(seconds=10)
+ 1288  finding2 = Finding(
+ 1289      id='test-finding-1',
+ 1290      rule_name='TestRule',
+ 1291      severity='warning',
+ 1292      title='Test finding',
+ 1293      description='Testing FindingStore',
+ 1294      evidence={},
+ 1295      status='active',
+ 1296      first_seen=later,
+ 1297      last_seen=later,
+ 1298      occurrences=1
+ 1299  )
+ 1300  result = store.add(finding2)
+ 1301  print('FINDINGS:', len(store.findings))
+ 1302  print('OCCURRENCES:', result.occurrences)
+ 1303  print('FIRST SEEN:', result.first_seen)
+ 1304  print('LAST SEEN:', result.last_seen)
+ 1305  "
+ 1306  python -c "
+ 1307  from core.orchestrator import Orchestrator
+ 1308  from core.graph.machine_graph import MachineGraph
+ 1309  from core.correlation.correlation_engine import CorrelationEngine
+ 1310  o = Orchestrator()
+ 1311  graph = MachineGraph(o.store)
+ 1312  engine = CorrelationEngine(graph)
+ 1313  for cycle in range(1, 3):
+ 1314      observations, relationships = o.run_once()
+ 1315      host = next(
+ 1316          obs for obs in observations
+ 1317          if obs.entity_type == 'host'
+ 1318      )
+ 1319      host.data['cpu'] = 95
+ 1320      neighbors = graph.get_current_neighbors(
+ 1321          host.entity_id
+ 1322      )
+ 1323      process_ids = {
+ 1324          n['entity_id']
+ 1325          for n in neighbors
+ 1326          if (
+ 1327              n['relationship'] == 'runs'
+ 1328              and n['direction'] == 'out'
+ 1329          )
+ 1330      }
+ 1331      process = next(
+ 1332          obs for obs in observations
+ 1333          if (
+ 1334              obs.entity_type == 'process'
+ 1335              and obs.entity_id in process_ids
+ 1336          )
+ 1337      )
+ 1338      process.data['cpu_percent'] = 80
+ 1339      findings = engine.analyze(
+ 1340          observations
+ 1341      )
+ 1342      print()
+ 1343      print('CYCLE:', cycle)
+ 1344      print('FINDINGS:', len(findings))
+ 1345      for finding in findings:
+ 1346          print('ID:', finding.id)
+ 1347          print('OCCURRENCES:', finding.occurrences)
+ 1348          print('FIRST SEEN:', finding.first_seen)
+ 1349          print('LAST SEEN:', finding.last_seen)
+ 1350  "
+ 1351  python -c "
+ 1352  from core.orchestrator import Orchestrator
+ 1353  from core.graph.machine_graph import MachineGraph
+ 1354  from core.correlation.correlation_engine import CorrelationEngine
+ 1355  o = Orchestrator()
+ 1356  graph = MachineGraph(o.store)
+ 1357  engine = CorrelationEngine(graph)
+ 1358  saved_process_id = None
+ 1359  for cycle in range(1, 3):
+ 1360      observations, relationships = o.run_once()
+ 1361      host = next(
+ 1362          obs for obs in observations
+ 1363          if obs.entity_type == 'host'
+ 1364      )
+ 1365      host.data['cpu'] = 95
+ 1366      if saved_process_id is None:
+ 1367          neighbors = graph.get_current_neighbors(
+ 1368              host.entity_id
+ 1369          )
+ 1370          process_ids = {
+ 1371              n['entity_id']
+ 1372              for n in neighbors
+ 1373              if (
+ 1374                  n['relationship'] == 'runs'
+ 1375                  and n['direction'] == 'out'
+ 1376              )
+ 1377          }
+ 1378          process = next(
+ 1379              obs for obs in observations
+ 1380              if (
+ 1381                  obs.entity_type == 'process'
+ 1382                  and obs.entity_id in process_ids
+ 1383              )
+ 1384          )
+ 1385          saved_process_id = process.entity_id
+ 1386      else:
+ 1387          process = next(
+ 1388              obs for obs in observations
+ 1389              if (
+ 1390                  obs.entity_type == 'process'
+ 1391                  and obs.entity_id == saved_process_id
+ 1392              )
+ 1393          )
+ 1394      process.data['cpu_percent'] = 80
+ 1395      findings = engine.analyze(
+ 1396          observations
+ 1397      )
+ 1398      print()
+ 1399      print('CYCLE:', cycle)
+ 1400      print('PROCESS:', process.entity_id)
+ 1401      print('FINDINGS:', len(findings))
+ 1402      for finding in findings:
+ 1403          print('ID:', finding.id)
+ 1404          print('OCCURRENCES:', finding.occurrences)
+ 1405          print('FIRST SEEN:', finding.first_seen)
+ 1406          print('LAST SEEN:', finding.last_seen)
+ 1407  "
+ 1408  python -c "
+ 1409  from core.orchestrator import Orchestrator
+ 1410  from core.graph.machine_graph import MachineGraph
+ 1411  o = Orchestrator()
+ 1412  graph = MachineGraph(o.store)
+ 1413  saved_process_id = None
+ 1414  for cycle in range(1, 3):
+ 1415      observations, relationships = o.run_once()
+ 1416      host = next(
+ 1417          obs for obs in observations
+ 1418          if obs.entity_type == 'host'
+ 1419      )
+ 1420      if saved_process_id is None:
+ 1421          process = next(
+ 1422              obs for obs in observations
+ 1423              if obs.entity_type == 'process'
+ 1424          )
+ 1425          saved_process_id = process.entity_id
+ 1426      else:
+ 1427          process = next(
+ 1428              obs for obs in observations
+ 1429              if obs.entity_id == saved_process_id
+ 1430          )
+ 1431      neighbors = graph.get_current_neighbors(
+ 1432          host.entity_id
+ 1433      )
+ 1434      process_ids = {
+ 1435          n['entity_id']
+ 1436          for n in neighbors
+ 1437          if (
+ 1438              n['relationship'] == 'runs'
+ 1439              and n['direction'] == 'out'
+ 1440          )
+ 1441      }
+ 1442      print()
+ 1443      print('CYCLE:', cycle)
+ 1444      print('PROCESS:', process.entity_id)
+ 1445      print('PROCESS IN OBSERVATIONS:', True)
+ 1446      print(
+ 1447          'PROCESS IN CURRENT GRAPH:',
+ 1448          process.entity_id in process_ids
+ 1449      )
+ 1450  "
+ 1451  python -c "
+ 1452  from core.orchestrator import Orchestrator
+ 1453  from core.graph.machine_graph import MachineGraph
+ 1454  o = Orchestrator()
+ 1455  observations, relationships = o.run_once()
+ 1456  graph = MachineGraph(o.store)
+ 1457  print('RUNS RELATIONSHIPS FROM HOST:')
+ 1458  print()
+ 1459  neighbors = graph.get_current_neighbors(
+ 1460      'localhost'
+ 1461  )
+ 1462  for n in neighbors:
+ 1463      if (
+ 1464          n['relationship'] == 'runs'
+ 1465          and n['direction'] == 'out'
+ 1466      ):
+ 1467          print(n)
+ 1468  print()
+ 1469  print('TOTAL CURRENT NEIGHBORS:', len(neighbors))
+ 1470  "
+ 1471  python -c "
+ 1472  from core.orchestrator import Orchestrator
+ 1473  from core.graph.machine_graph import MachineGraph
+ 1474  o = Orchestrator()
+ 1475  observations, relationships = o.run_once()
+ 1476  graph = MachineGraph(o.store)
+ 1477  processes = [
+ 1478      obs
+ 1479      for obs in observations
+ 1480      if obs.entity_type == 'process'
+ 1481  ]
+ 1482  runs = [
+ 1483      n
+ 1484      for n in graph.get_current_neighbors('localhost')
+ 1485      if (
+ 1486          n['relationship'] == 'runs'
+ 1487          and n['direction'] == 'out'
+ 1488      )
+ 1489  ]
+ 1490  run_ids = {
+ 1491      n['entity_id']
+ 1492      for n in runs
+ 1493  }
+ 1494  print('PROCESS OBSERVATIONS:', len(processes))
+ 1495  print('RUNS RELATIONSHIPS:', len(runs))
+ 1496  print()
+ 1497  print('RUN PROCESS IDS:')
+ 1498  for process_id in run_ids:
+ 1499      print(process_id)
+ 1500  print()
+ 1501  print('PROCESS OBSERVATIONS MATCHING RUNS:')
+ 1502  matches = [
+ 1503      p
+ 1504      for p in processes
+ 1505      if p.entity_id in run_ids
+ 1506  ]
+ 1507  print('MATCHES:', len(matches))
+ 1508  for p in matches:
+ 1509      print(
+ 1510          p.entity_id,
+ 1511          p.data.get('name'),
+ 1512          p.data.get('cpu_percent')
+ 1513      )
+ 1514  "
+ 1515  sed -n '1,240p' core/relationships/system/host.py
+ 1516  sed -n '1,240p' core/relationships/system/system.py
+ 1517  sed -n '1,240p' core/relationships/system.py
+ 1518  python -c "
+ 1519  from core.orchestrator import Orchestrator
+ 1520  o = Orchestrator()
+ 1521  observations, relationships = o.run_once()
+ 1522  runs = [
+ 1523      r
+ 1524      for r in relationships
+ 1525      if (
+ 1526          r.relationship_type == 'runs'
+ 1527          and r.source_entity_type == 'host'
+ 1528      )
+ 1529  ]
+ 1530  print('RUNS CREATED BY ORCHESTRATOR:', len(runs))
+ 1531  for r in runs[:10]:
+ 1532      print(r)
+ 1533  "
+ 1534  se
+ 1535  git commit  -m "Updated corelation cpu"
+ 1536  git commit  -m "Updated corelation  finding cpu"
+ 1537  git push --force-with-lease
+ 1538  exit
+ 1539  cd galaxy
+ 1540  source venv/bin/activate
+ 1541  code .
+ 1542  find core -type f | sort | grep -E 'orchestrator|sqlite_store|machine_graph|correlation'
+ 1543  python - <<'PY'
+from core.orchestrator import Orchestrator
+
+orchestrator = Orchestrator()
+
+observations, relationships = orchestrator.run_once()
+store = orchestrator.store
+
+print("\n--- COLLECTION ---")
+print("Observations collected:", len(observations))
+print("Relationships derived:", len(relationships))
+
+print("\n--- STORAGE ---")
+stored_observations = store.all()
+stored_relationships = store.current_relationships()
+
+print("Observations available in store:", len(stored_observations))
+print("Relationships available in store:", len(stored_relationships))
+
+assert len(observations) > 0, "No observations collected"
+assert len(stored_observations) > 0, "No observations found in storage"
+assert len(relationships) == len(stored_relationships), (
+    "The returned relationship count differs from the stored current "
+    "relationship count"
+)
+
+print("\nCollection and storage checks passed.")
+PY
+
+ 1544  python - <<'PY'
+from core.orchestrator import Orchestrator
+
+orchestrator = Orchestrator()
+observations, relationships = orchestrator.run_once()
+store = orchestrator.store
+
+stored_observations = store.all()
+stored_relationships = store.current_relationships()
+
+print("\n--- COLLECTION ---")
+print("Collected observations:", len(observations))
+print("Derived relationships:", len(relationships))
+
+print("\n--- STORAGE ---")
+print("Stored observations:", len(stored_observations))
+print("Current relationships returned:", len(stored_relationships))
+
+assert observations, "No observations collected"
+assert stored_observations, "No observations stored"
+assert stored_relationships, "No current relationships returned"
+
+print("\nPASS: Collection and storage return data.")
+PY
+
+ 1545  python - <<'PY'
+from core.orchestrator import Orchestrator
+from core.graph.machine_graph import MachineGraph
+
+orchestrator = Orchestrator()
+observations, relationships = orchestrator.run_once()
+
+graph = MachineGraph(orchestrator.store)
+
+current = graph.get_current_relationships()
+
+print("\n--- MACHINE GRAPH ---")
+print("Relationships available to graph:", len(current))
+
+if current:
+    first = current[0]
+    root_entity_id = first[1]
+
+    print("\nTest root:", root_entity_id)
+    print("\nOutgoing relationships:")
+    print(graph.get_outgoing(root_entity_id))
+
+    print("\nIncoming relationships:")
+    print(graph.get_incoming(root_entity_id))
+
+    print("\nTraversal:")
+    result = graph.traverse_current(root_entity_id, max_depth=2)
+    print(result)
+
+    assert result is not None, "Graph traversal returned no result"
+    print("\nPASS: MachineGraph can read relationships and traverse.")
+else:
+    print("FAIL: No relationships available to MachineGraph.")
+PY
+
+ 1546  grep -n -A100 'def current_relationships' core/storage/sqlite_store.py
+ 1547  python - <<'PY'
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+store = SQLiteStore()
+graph = MachineGraph(store)
+
+current = graph._relationships()
+historical = graph._relationships(include_history=True)
+
+print("Current relationships:", len(current))
+print("All stored relationships:", len(historical))
+
+assert len(current) <= len(historical)
+
+print("Relationship selection test passed.")
+PY
+
+ 1548  python - <<'PY'
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+store = SQLiteStore()
+graph = MachineGraph(store)
+
+current = graph._relationships()
+historical = graph._relationships(include_history=True)
+
+print("Current relationships:", len(current))
+print("All stored relationships:", len(historical))
+
+assert len(current) <= len(historical)
+
+print("Relationship selection test passed.")
+PY
+
+ 1549  python - <<'PY'
+from types import SimpleNamespace
+
+import core.storage.sqlite_store as storage_module
+from core.storage.sqlite_store import SQLiteStore
+
+
+# Keep the test independent of application identity logic.
+storage_module.build_application_identity = lambda data: "app:test"
+
+
+class FakeStore:
+    def __init__(self):
+        self.relationships = [
+            # Log generated by a current process.
+            (
+                "log",
+                "log:test-current",
+                "generated_by",
+                "process",
+                "process:test-current",
+                "2026-10-12T10:00:00+00:00",
+            ),
+
+            # Log generated by a historical process.
+            (
+                "log",
+                "log:test-historical",
+                "generated_by",
+                "process",
+                "process:test-historical",
+                "2026-10-12T09:00:00+00:00",
+            ),
+        ]
+
+        self.processes = [
+            SimpleNamespace(
+                entity_id="process:test-current",
+                data={},
+            )
+        ]
+
+    def all_relationships(self):
+        return self.relationships
+
+    def latest_process_observations(self):
+        return self.processes
+
+
+store = FakeStore()
+
+# Call the actual method with our controlled fake store.
+current = SQLiteStore.current_relationships(store)
+historical = store.all_relationships()
+
+current_log = (
+    "log",
+    "log:test-current",
+    "generated_by",
+    "process",
+    "process:test-current",
+    "2026-10-12T10:00:00+00:00",
+)
+
+historical_log = (
+    "log",
+    "log:test-historical",
+    "generated_by",
+    "process",
+    "process:test-historical",
+    "2026-10-12T09:00:00+00:00",
+)
+
+# Case 1: Current process relationship remains visible.
+assert current_log in current, (
+    "FAIL: Current process log relationship was excluded"
+)
+print("PASS: Current process log relationship remains connected.")
+
+# Case 2: Historical process relationship is excluded.
+assert historical_log not in current, (
+    "FAIL: Historical process log relationship remains in current view"
+)
+print("PASS: Historical process log relationship is excluded.")
+
+# Case 3: Historical relationship remains stored.
+assert historical_log in historical, (
+    "FAIL: Historical relationship was lost from storage"
+)
+print("PASS: Historical log relationship remains in all_relationships().")
+
+print("\nAll three tests passed.")
+PY
+
+ 1550  python - <<'PY'
+from types import SimpleNamespace
+
+import core.storage.sqlite_store as storage_module
+from core.storage.sqlite_store import SQLiteStore
+
+
+# Keep the test independent of application identity logic.
+storage_module.build_application_identity = lambda data: "app:test"
+
+
+class FakeStore:
+    def __init__(self):
+        self.relationships = [
+            # Log generated by a current process.
+            (
+                "log",
+                "log:test-current",
+                "generated_by",
+                "process",
+                "process:test-current",
+                "2026-10-12T10:00:00+00:00",
+            ),
+
+            # Log generated by a historical process.
+            (
+                "log",
+                "log:test-historical",
+                "generated_by",
+                "process",
+                "process:test-historical",
+                "2026-10-12T09:00:00+00:00",
+            ),
+        ]
+
+        self.processes = [
+            SimpleNamespace(
+                entity_id="process:test-current",
+                data={},
+            )
+        ]
+
+    def all_relationships(self):
+        return self.relationships
+
+    def latest_process_observations(self):
+        return self.processes
+
+
+store = FakeStore()
+
+# Call the actual method with our controlled fake store.
+current = SQLiteStore.current_relationships(store)
+historical = store.all_relationships()
+
+current_log = (
+    "log",
+    "log:test-current",
+    "generated_by",
+    "process",
+    "process:test-current",
+    "2026-10-12T10:00:00+00:00",
+)
+
+historical_log = (
+    "log",
+    "log:test-historical",
+    "generated_by",
+    "process",
+    "process:test-historical",
+    "2026-10-12T09:00:00+00:00",
+)
+
+# Case 1: Current process relationship remains visible.
+assert current_log in current, (
+    "FAIL: Current process log relationship was excluded"
+)
+print("PASS: Current process log relationship remains connected.")
+
+# Case 2: Historical process relationship is excluded.
+assert historical_log not in current, (
+    "FAIL: Historical process log relationship remains in current view"
+)
+print("PASS: Historical process log relationship is excluded.")
+
+# Case 3: Historical relationship remains stored.
+assert historical_log in historical, (
+    "FAIL: Historical relationship was lost from storage"
+)
+print("PASS: Historical log relationship remains in all_relationships().")
+
+print("\nAll three tests passed.")
+PY
+
+ 1551  python - <<'PY'
+from types import SimpleNamespace
+
+import core.storage.sqlite_store as storage_module
+from core.storage.sqlite_store import SQLiteStore
+
+
+# Keep the test independent of application identity logic.
+storage_module.build_application_identity = lambda data: "app:test"
+
+
+class FakeStore:
+    def __init__(self):
+        self.relationships = [
+            # Log generated by a current process.
+            (
+                "log",
+                "log:test-current",
+                "generated_by",
+                "process",
+                "process:test-current",
+                "2026-10-12T10:00:00+00:00",
+            ),
+
+            # Log generated by a historical process.
+            (
+                "log",
+                "log:test-historical",
+                "generated_by",
+                "process",
+                "process:test-historical",
+                "2026-10-12T09:00:00+00:00",
+            ),
+        ]
+
+        self.processes = [
+            SimpleNamespace(
+                entity_id="process:test-current",
+                data={},
+            )
+        ]
+
+    def all_relationships(self):
+        return self.relationships
+
+    def latest_process_observations(self):
+        return self.processes
+
+
+store = FakeStore()
+
+# Call the actual method with our controlled fake store.
+current = SQLiteStore.current_relationships(store)
+historical = store.all_relationships()
+
+current_log = (
+    "log",
+    "log:test-current",
+    "generated_by",
+    "process",
+    "process:test-current",
+    "2026-10-12T10:00:00+00:00",
+)
+
+historical_log = (
+    "log",
+    "log:test-historical",
+    "generated_by",
+    "process",
+    "process:test-historical",
+    "2026-10-12T09:00:00+00:00",
+)
+
+# Case 1: Current process relationship remains visible.
+assert current_log in current, (
+    "FAIL: Current process log relationship was excluded"
+)
+print("PASS: Current process log relationship remains connected.")
+
+# Case 2: Historical process relationship is excluded.
+assert historical_log not in current, (
+    "FAIL: Historical process log relationship remains in current view"
+)
+print("PASS: Historical process log relationship is excluded.")
+
+# Case 3: Historical relationship remains stored.
+assert historical_log in historical, (
+    "FAIL: Historical relationship was lost from storage"
+)
+print("PASS: Historical log relationship remains in all_relationships().")
+
+print("\nAll three tests passed.")
+PY
+
+ 1552  python - <<'PY'
+from types import SimpleNamespace
+
+import core.storage.sqlite_store as storage_module
+from core.storage.sqlite_store import SQLiteStore
+
+
+# Keep the test independent of application identity logic.
+storage_module.build_application_identity = lambda data: "app:test"
+
+
+class FakeStore:
+    def __init__(self):
+        self.relationships = [
+            # Log generated by a current process.
+            (
+                "log",
+                "log:test-current",
+                "generated_by",
+                "process",
+                "process:test-current",
+                "2026-10-12T10:00:00+00:00",
+            ),
+
+            # Log generated by a historical process.
+            (
+                "log",
+                "log:test-historical",
+                "generated_by",
+                "process",
+                "process:test-historical",
+                "2026-10-12T09:00:00+00:00",
+            ),
+        ]
+
+        self.processes = [
+            SimpleNamespace(
+                entity_id="process:test-current",
+                data={},
+            )
+        ]
+
+    def all_relationships(self):
+        return self.relationships
+
+    def latest_process_observations(self):
+        return self.processes
+
+
+store = FakeStore()
+
+# Call the actual method with our controlled fake store.
+current = SQLiteStore.current_relationships(store)
+historical = store.all_relationships()
+
+current_log = (
+    "log",
+    "log:test-current",
+    "generated_by",
+    "process",
+    "process:test-current",
+    "2026-10-12T10:00:00+00:00",
+)
+
+historical_log = (
+    "log",
+    "log:test-historical",
+    "generated_by",
+    "process",
+    "process:test-historical",
+    "2026-10-12T09:00:00+00:00",
+)
+
+# Case 1: Current process relationship remains visible.
+assert current_log in current, (
+    "FAIL: Current process log relationship was excluded"
+)
+print("PASS: Current process log relationship remains connected.")
+
+# Case 2: Historical process relationship is excluded.
+assert historical_log not in current, (
+    "FAIL: Historical process log relationship remains in current view"
+)
+print("PASS: Historical process log relationship is excluded.")
+
+# Case 3: Historical relationship remains stored.
+assert historical_log in historical, (
+    "FAIL: Historical relationship was lost from storage"
+)
+print("PASS: Historical log relationship remains in all_relationships().")
+
+print("\nAll three tests passed.")
+PY
+
+ 1553  python - <<'PY'
+from types import SimpleNamespace
+
+import core.storage.sqlite_store as storage_module
+from core.storage.sqlite_store import SQLiteStore
+
+
+# Keep the test independent of application identity logic.
+storage_module.build_application_identity = lambda data: "app:test"
+
+
+class FakeStore:
+    def __init__(self):
+        self.relationships = [
+            # Log generated by a current process.
+            (
+                "log",
+                "log:test-current",
+                "generated_by",
+                "process",
+                "process:test-current",
+                "2026-10-12T10:00:00+00:00",
+            ),
+
+            # Log generated by a historical process.
+            (
+                "log",
+                "log:test-historical",
+                "generated_by",
+                "process",
+                "process:test-historical",
+                "2026-10-12T09:00:00+00:00",
+            ),
+        ]
+
+        self.processes = [
+            SimpleNamespace(
+                entity_id="process:test-current",
+                data={},
+            )
+        ]
+
+    def all_relationships(self):
+        return self.relationships
+
+    def latest_process_observations(self):
+        return self.processes
+
+
+store = FakeStore()
+
+# Call the actual method with our controlled fake store.
+current = SQLiteStore.current_relationships(store)
+historical = store.all_relationships()
+
+current_log = (
+    "log",
+    "log:test-current",
+    "generated_by",
+    "process",
+    "process:test-current",
+    "2026-10-12T10:00:00+00:00",
+)
+
+historical_log = (
+    "log",
+    "log:test-historical",
+    "generated_by",
+    "process",
+    "process:test-historical",
+    "2026-10-12T09:00:00+00:00",
+)
+
+# Case 1: Current process relationship remains visible.
+assert current_log in current, (
+    "FAIL: Current process log relationship was excluded"
+)
+print("PASS: Current process log relationship remains connected.")
+
+# Case 2: Historical process relationship is excluded.
+assert historical_log not in current, (
+    "FAIL: Historical process log relationship remains in current view"
+)
+print("PASS: Historical process log relationship is excluded.")
+
+# Case 3: Historical relationship remains stored.
+assert historical_log in historical, (
+    "FAIL: Historical relationship was lost from storage"
+)
+print("PASS: Historical log relationship remains in all_relationships().")
+
+print("\nAll three tests passed.")
+PY
+
+ 1554  python - <<'PY'
+from core.storage.sqlite_store import SQLiteStore
+from core.graph.machine_graph import MachineGraph
+
+store = SQLiteStore()
+graph = MachineGraph(store)
+
+current = graph._relationships()
+historical = graph._relationships(include_history=True)
+
+print("Current relationships:", len(current))
+print("All stored relationships:", len(historical))
+
+assert len(current) <= len(historical)
+
+print("Relationship selection test passed.")
+PY
+
+ 1555  cd ~/galaxy
+ 1556  source venv/bin/activate
+ 1557  python - <<'PY'
+from core.graph.machine_graph import MachineGraph
+
+
+class FakeStore:
+    def current_relationships(self):
+        return [
+            (
+                "process", "123",
+                "connects_to",
+                "service", "123",
+                "2026-10-12T10:00:00+00:00",
+            ),
+            (
+                "service", "123",
+                "depends_on",
+                "database", "db-1",
+                "2026-10-12T10:00:01+00:00",
+            ),
+        ]
+
+    def all_relationships(self):
+        return self.current_relationships()
+
+
+graph = MachineGraph(FakeStore())
+
+# Test 1: Neighbors of the process node
+process_neighbors = graph.get_neighbors("process", "123")
+
+assert len(process_neighbors) == 1
+assert process_neighbors[0]["entity_type"] == "service"
+assert process_neighbors[0]["entity_id"] == "123"
+
+print("PASS: Process and service with the same ID are distinguished.")
+
+# Test 2: Neighbors of the service node
+service_neighbors = graph.get_neighbors("service", "123")
+
+assert len(service_neighbors) == 2
+
+print("PASS: Service correctly identifies both neighboring nodes.")
+
+# Test 3: Shortest path through the service node
+path = graph.shortest_path(
+    "process", "123",
+    "database", "db-1",
+)
+
+expected_path = [
+    ("process", "123"),
+    ("service", "123"),
+    ("database", "db-1"),
+]
+
+assert path == expected_path, f"Unexpected path: {path}"
+
+print("PASS: Shortest path uses composite node identities.")
+print("\nAll composite identity tests passed.")
+PY
+
+ 1558  python - <<'PY'
+from core.graph.machine_graph import MachineGraph
+
+
+class FakeStore:
+    def current_relationships(self):
+        return [
+            (
+                "process", "123",
+                "connects_to",
+                "service", "123",
+                "2026-10-12T10:00:00+00:00",
+            ),
+            (
+                "service", "123",
+                "depends_on",
+                "database", "db-1",
+                "2026-10-12T10:00:01+00:00",
+            ),
+        ]
+
+    def all_relationships(self):
+        return self.current_relationships()
+
+
+graph = MachineGraph(FakeStore())
+
+# Test current neighbors
+process_neighbors = graph.get_current_neighbors(
+    "process", "123"
+)
+
+assert len(process_neighbors) == 1
+assert process_neighbors[0]["entity_type"] == "service"
+
+service_neighbors = graph.get_current_neighbors(
+    "service", "123"
+)
+
+assert len(service_neighbors) == 2
+
+print("PASS: Current neighbors distinguish entity types.")
+
+# Test current traversal
+result = graph.traverse_current(
+    "process", "123", max_depth=3
+)
+
+assert result["entity_type"] == "process"
+assert result["entity_id"] == "123"
+
+service_node = result["neighbors"][0]["node"]
+
+assert service_node["entity_type"] == "service"
+assert service_node["entity_id"] == "123"
+
+database_node = service_node["neighbors"][0]["node"]
+
+assert database_node["entity_type"] == "database"
+assert database_node["entity_id"] == "db-1"
+
+print("PASS: Current traversal preserves composite identities.")
+print("\nAll current graph tests passed.")
+PY
+
+ 1559  cd ~/galaxy
+ 1560  find core -maxdepth 3 -type f -name '*.py' | sort
+ 1561  find . -maxdepth 3 -type d   -not -path './.git*'   -not -path './venv*'   -not -path './__pycache__*' | sort
+ 1562  cd ~/galaxy
+ 1563  source venv/bin/activate
+ 1564  mkdir -p core/correlation/rules
+ 1565  touch core/correlation/__init__.py
+ 1566  touch core/correlation/rules/__init__.py
+ 1567  cat > core/correlation/finding.py <<'PY'
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+
+
+@dataclass
+class Finding:
+    finding_id: str
+    rule_id: str
+    title: str
+    description: str
+    severity: str
+    affected_entities: list[dict[str, str]] = field(
+        default_factory=list
+    )
+    evidence: list[dict[str, Any]] = field(
+        default_factory=list
+    )
+    detected_at: str = field(
+        default_factory=lambda: datetime.now(
+            timezone.utc
+        ).isoformat()
+    )
+
+    def __post_init__(self):
+        allowed_severities = {
+            "info",
+            "low",
+            "medium",
+            "high",
+            "critical",
+        }
+
+        if self.severity not in allowed_severities:
+            raise ValueError(
+                f"Invalid severity: {self.severity}"
+            )
+
+        if not self.finding_id:
+            raise ValueError("finding_id cannot be empty")
+
+        if not self.rule_id:
+            raise ValueError("rule_id cannot be empty")
+PY
+
+ 1568  cat > core/correlation/correlation_rule.py <<'PY'
+from abc import ABC, abstractmethod
+
+
+class CorrelationRule(ABC):
+    rule_id = "base_rule"
+    description = "Base correlation rule"
+
+    @abstractmethod
+    def evaluate(self, observations, graph):
+        """
+        Evaluate observations and graph relationships.
+
+        Return a list of Finding objects.
+        """
+        raise NotImplementedError
+PY
+
+ 1569  cat > core/correlation/correlation_engine.py <<'PY'
+from core.correlation.finding import Finding
+
+
+class CorrelationEngine:
+    def __init__(self, store, graph, rules=None):
+        self.store = store
+        self.graph = graph
+        self.rules = list(rules or [])
+
+    def register_rule(self, rule):
+        if any(
+            existing.rule_id == rule.rule_id
+            for existing in self.rules
+        ):
+            raise ValueError(
+                f"Duplicate correlation rule: {rule.rule_id}"
+            )
+
+        self.rules.append(rule)
+
+    def run_once(self):
+        observations = self.store.all()
+        findings = []
+
+        for rule in self.rules:
+            rule_findings = rule.evaluate(
+                observations,
+                self.graph,
+            )
+
+            if rule_findings is None:
+                raise TypeError(
+                    f"Rule {rule.rule_id} returned None; "
+                    "expected a list of Finding objects"
+                )
+
+            if not isinstance(rule_findings, list):
+                raise TypeError(
+                    f"Rule {rule.rule_id} must return "
+                    "a list of Finding objects"
+                )
+
+            for finding in rule_findings:
+                if not isinstance(finding, Finding):
+                    raise TypeError(
+                        f"Rule {rule.rule_id} returned "
+                        "an invalid finding"
+                    )
+
+            findings.extend(rule_findings)
+
+        return findings
+PY
+
+ 1570  cat > core/correlation/__init__.py <<'PY'
+from core.correlation.correlation_engine import CorrelationEngine
+from core.correlation.correlation_rule import CorrelationRule
+from core.correlation.finding import Finding
+
+__all__ = [
+    "CorrelationEngine",
+    "CorrelationRule",
+    "Finding",
+]
+PY
+
+ 1571  echo "Correlation foundation files created."
+ 1572  find core/correlation -maxdepth 3 -type f -name '*.py' | sort
+ 1573  python -m compileall -q core/correlation
+ 1574  python -c "from core.correlation import CorrelationEngine, CorrelationRule, Finding; print('Correlation imports OK')"
+ 1575  git add .
+ 1576  git commit  -m "Updated corelation  finding cpunew 12oct"
+ 1577  git push
+ 1578  history
+
