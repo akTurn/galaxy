@@ -1,0 +1,241 @@
+Perfect. Your `Observation` model is straightforward, so we can test `FailedServiceRule` using the real constructor from `core/models/observation.py`.
+
+## 1. Create and run the test
+
+This test checks three cases:
+
+- A failed service should generate a finding.
+- An active service should not generate a finding.
+- A service with missing state should not generate a finding.
+
+Run this from `~/galaxy`:
+
+```
+
+cd ~/galaxy
+
+python - <<'PY'
+from datetime import datetime, timezone
+
+from core.models.observation import Observation
+from core.correlation.rules.failed_service_rule import FailedServiceRule
+
+
+now = datetime.now(timezone.utc)
+
+observations = [
+    Observation(
+        source="systemd",
+        entity_type="service",
+        entity_id="test-failed.service",
+        timestamp=now,
+        data={
+            "name": "test-failed.service",
+            "state": {
+                "load": "loaded",
+                "active": "failed",
+                "sub": "failed",
+            },
+            "runtime": {"main_pid": 0},
+        },
+    ),
+    Observation(
+        source="systemd",
+        entity_type="service",
+        entity_id="test-healthy.service",
+        timestamp=now,
+        data={
+            "name": "test-healthy.service",
+            "state": {
+                "load": "loaded",
+                "active": "active",
+                "sub": "running",
+            },
+            "runtime": {"main_pid": 1234},
+        },
+    ),
+    Observation(
+        source="systemd",
+        entity_type="service",
+        entity_id="test-missing-state.service",
+        timestamp=now,
+        data={
+            "name": "test-missing-state.service",
+        },
+    ),
+]
+
+rule = FailedServiceRule()
+findings = rule.evaluate(observations, graph=None)
+
+assert len(findings) == 1, (
+    f"Expected exactly one finding, got {len(findings)}"
+)
+
+finding = findings[0]
+
+assert finding.rule_id == "failed_service"
+assert finding.severity == "high"
+assert finding.affected_entities == [
+    {
+        "entity_type": "service",
+        "entity_id": "test-failed.service",
+    }
+]
+assert finding.evidence[0]["value"] == "failed"
+
+print("PASS: Failed service generated a finding.")
+print("PASS: Active service did not generate a finding.")
+print("PASS: Missing service state was ignored.")
+print("Finding ID:", finding.finding_id)
+print("Severity:", finding.severity)
+print("Evidence:", finding.evidence)
+print("\nAll FailedServiceRule tests passed.")
+PY
+
+```
+
+## 2. What this test verifies
+
+The rule uses the `Observation` model correctly and returns a `Finding` with the expected service identity, severity, and evidence. It doesn't access the real system or modify your stored observations.
+
+One limitation to remember: a service being reported as `failed` is a current-state observation. Detecting repeated failures or a service that used to run but has stopped will require additional logic using lifecycle events or historical observations.
+
+Run the test and share the output. Once it passes, we'll proceed to the next rule.
+
+
+Exactly. This is an important distinction in Galaxy's correlation architecture: detecting a current condition is different from detecting a change over time.
+
+Let's preserve this distinction as we add more rules.
+
+## Current-state vs. historical detection
+
+| Detection type     | Example                                              | Required data                                          |
+| ------------------ | ---------------------------------------------------- | ------------------------------------------------------ |
+| Current state      | A service is currently `failed`                      | Latest service observation                             |
+| State transition   | A running service has stopped                        | Previous and current observations, or lifecycle events |
+| Repeated failure   | A service has failed several times within 10 minutes | Timestamped history or lifecycle events                |
+| Persistent failure | A service has remained failed for 5 minutes          | Historical observations or a recorded transition time  |
+
+## How this applies to Galaxy
+
+- `FailedServiceRule` detects a service whose current active state is `failed`. It does not establish when the failure began or whether it happened repeatedly.
+- `ProcessLifecycleFailureRule` should use lifecycle events or historical observations to identify process exits or repeated restarts, if the collected data supports those conclusions.
+- `InactiveCriticalServiceRule` should compare current service states against an explicit list of services configured as critical. An inactive service is not automatically a failure.
+- `RepeatedErrorLogRule` needs timestamped log records and reliable error-severity information to count errors over a time window.
+
+One additional safeguard: when a service disappears from the latest observations, Galaxy should not automatically conclude that it stopped unexpectedly. The collector may have failed, or the observation may be missing for another reason.
+
+We'll keep each rule's required evidence explicit and test both positive cases and cases where evidence is missing. That will help Galaxy produce findings that are explainable rather than merely suspicious.
+
+
+
+Yes — Galaxy is moving in the right direction for building a local AI system that monitors your own computer and environment. But I would make one architectural distinction before we add more correlation rules.
+
+You are not just building a collection of monitoring scripts. Your goal is to build a local system that observes your machine, understands relationships between components, detects problems, and eventually uses AI to explain what is happening and recommend actions.
+
+## 1. What Galaxy should look like
+
+1\. Local environment
+
+Processes · CPU · Memory · Network · Services · Logs · Databases
+
+2\. Collectors and normalization
+
+Collect observations and convert them into a consistent format
+
+3\. Storage and system graph
+
+SQLite history · Current state · Relationships between entities
+
+4\. Detection and correlation
+
+Rules · Anomalies · Related failures · Evidence
+
+5\. Local AI reasoning
+
+Explain incidents · Investigate evidence · Recommend fixes
+
+6\. Human approval and controlled actions
+
+Show the recommendation first; execute only with appropriate permission
+
+This is a sensible architecture for your goal.
+
+## 2. Is your current development approach correct?
+
+Mostly, yes. Here is how I would assess your current work.
+
+| Galaxy component             | Assessment                        | What matters next                          |
+| ---------------------------- | --------------------------------- | ------------------------------------------ |
+| Collectors                   | Good foundation                   | Reliable, efficient collection             |
+| Normalized observations      | Good foundation                   | Consistent schemas and timestamps          |
+| SQLite storage               | Appropriate for a local prototype | Retention, indexing and recovery           |
+| System relationships         | Important and correctly motivated | Validate current versus historical edges   |
+| Correlation rules            | Correct next layer                | Test real evidence and false positives     |
+| AI reasoning                 | Not yet the priority              | Add after evidence retrieval is dependable |
+| Recommendations and approval | Good long-term design             | Keep actions restricted and auditable      |
+
+Your recent work on process snapshots, current relationships, and correlation rules is useful. However, a rule passing a unit test does not yet prove that Galaxy can accurately diagnose a real machine problem. Integration tests and real-world scenarios are essential.
+
+## 3. What I would change before adding more rules
+
+### A. Separate observation, diagnosis and AI
+
+Keep these as separate responsibilities:
+
+- Observation: A service is failed; a process is missing; CPU usage is high.
+- Correlation: These observations are related through a service, process, host or application.
+- Diagnosis: Evidence suggests the service failed because its dependency is unavailable.
+- AI explanation: Explain the evidence and possible causes in understandable language.
+- Recommendation: Suggest a safe, specific next step.
+
+This separation prevents an AI model from inventing system facts.
+
+### B. Build an evidence retrieval layer
+
+Before sending anything to a local model, Galaxy should be able to answer questions such as:
+
+- Which services are currently failed?
+- Which processes belong to those services?
+- What changed immediately before the failure?
+- Which recent logs are associated with the affected components?
+- Is this condition new, recurring or normal for this machine?
+
+Your SQLite store and graph should provide these answers. You should not need to send the entire database or every log to the model.
+
+### C. Make the monitoring loop reliable
+
+For continuous local monitoring, plan for:
+
+- Collection intervals and timeouts.
+- Process and service lifecycle changes.
+- Log deduplication and retention.
+- Missing or inaccessible data.
+- Resource usage of Galaxy itself.
+- Tests against actual machine observations.
+
+You already have some of these foundations, including the orchestrator, lifecycle tracking and current-state relationships.
+
+## 4. When should you add a local AI model?
+
+Not immediately. First, make sure the deterministic monitoring and correlation layers work reliably.
+
+Once they do, a local model can provide natural-language reasoning without requiring you to send machine data to an external AI service. A model runner such as Ollama is one possible option.
+
+The local model will still need enough memory and processing capacity, and running locally does not automatically make every operation safe. Keep privileged commands, destructive changes and automated remediation behind explicit controls.
+
+## 5. My recommended next milestone for Galaxy
+
+Rather than adding many more isolated rules, build and validate one complete incident investigation:
+
+1. Galaxy detects a failed service.
+2. It checks whether the service's main process exists in the current process snapshot.
+3. It retrieves relevant service relationships and recent logs.
+4. The correlation engine creates a finding with supporting evidence.
+5. The local AI explains the finding using that evidence and identifies uncertainty.
+6. Galaxy presents a recommendation without executing a potentially disruptive action automatically.
+
+Your `FailedServiceMissingProcessRule` is a useful small step toward this scenario. Next, test it against the actual store and graph, then expand the investigation to logs and related components.
+
+One important question: When you say you want local AI to monitor your local environment, do you mean monitoring only your own computer (Linux/WSL, processes, services and databases), or do you ultimately want Galaxy to monitor your entire local network and multiple machines as well? That choice affects the collector, identity and architecture decisions we should make now.
